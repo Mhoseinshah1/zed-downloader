@@ -154,11 +154,47 @@ gen_fernet() {
     printf '%s' "$key"
 }
 
+# Secrets must survive re-runs: the postgres volume was initialized with
+# the original POSTGRES_PASSWORD and provider keys at rest are encrypted
+# with the original Fernet ENCRYPTION_KEY. Read the PRE-EXISTING .env
+# now, BEFORE .env.example may be copied over it below — a grep after
+# that copy would only see fresh placeholders.
+# Precedence: explicit env var > existing .env value > freshly generated.
+EXISTING_ENV="$APP_DIR/.env"
+
+# existing_env KEY — print KEY's value from the pre-existing .env.
+# Empty values and the "change-me" placeholder count as absent.
+existing_env() {
+    local value=""
+    if [[ -f "$EXISTING_ENV" ]]; then
+        value="$(grep -E "^$1=" "$EXISTING_ENV" 2>/dev/null | head -n1 | cut -d= -f2- || true)"
+    fi
+    [[ "$value" == "change-me" ]] && value=""
+    printf '%s' "$value"
+}
+
+# preserve_secret VAR — default VAR from the pre-existing .env unless it
+# was explicitly provided via the environment.
+preserve_secret() {
+    local var="$1" existing
+    [[ -n "${!var:-}" ]] && return 0   # explicit env var wins
+    existing="$(existing_env "$var")"
+    if [[ -n "$existing" ]]; then
+        printf -v "$var" '%s' "$existing"
+        log "$var: preserved from existing .env"
+    fi
+}
+
+preserve_secret POSTGRES_PASSWORD
+preserve_secret JWT_SECRET
+preserve_secret TELEGRAM_WEBHOOK_SECRET
+preserve_secret ENCRYPTION_KEY
+
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(gen_hex)}"
 JWT_SECRET="${JWT_SECRET:-$(gen_hex)}"
 TELEGRAM_WEBHOOK_SECRET="${TELEGRAM_WEBHOOK_SECRET:-$(gen_hex)}"
 ENCRYPTION_KEY="${ENCRYPTION_KEY:-$(gen_fernet)}"
-log "secrets generated (postgres password, JWT secret, webhook secret, Fernet key)"
+log "secrets ready (env-provided or preserved values kept, missing ones generated)"
 
 # ---------------------------------------------------------------- write .env
 if [[ -f .env ]]; then
@@ -186,7 +222,8 @@ set_env() {
     fi
 }
 
-# DATABASE_URL is built from parts; user/db come from .env defaults.
+# DATABASE_URL is rebuilt from parts so it always matches the (possibly
+# preserved) POSTGRES_PASSWORD above; user/db come from .env defaults.
 POSTGRES_USER="$(grep -E '^POSTGRES_USER=' .env | head -n1 | cut -d= -f2- || true)"
 POSTGRES_USER="${POSTGRES_USER:-zed}"
 POSTGRES_DB="$(grep -E '^POSTGRES_DB=' .env | head -n1 | cut -d= -f2- || true)"

@@ -25,13 +25,19 @@ die()  { err "$*"; exit 1; }
 
 APP_DIR="${ZED_DIR:-/opt/zed-downloader}"
 ENV_FILE="$APP_DIR/.env"
-# NOTE: --env-file (not --project-directory) so ${VAR} interpolation reads
-# the root .env while relative paths inside the compose file stay anchored
-# to deploy/.
-COMPOSE=(docker compose -f "$APP_DIR/deploy/docker-compose.yml")
-if [[ -f "$ENV_FILE" ]]; then
-    COMPOSE+=(--env-file "$ENV_FILE")
-fi
+# NOTE: the COMPOSE array is (re)built by build_compose AFTER the
+# archive's .env has been restored — building it here would miss an
+# .env that only exists inside the archive and run compose without
+# --env-file. --env-file (not --project-directory) so ${VAR}
+# interpolation reads the root .env while relative paths inside the
+# compose file stay anchored to deploy/.
+build_compose() {
+    COMPOSE=(docker compose -f "$APP_DIR/deploy/docker-compose.yml")
+    if [[ -f "$ENV_FILE" ]]; then
+        COMPOSE+=(--env-file "$ENV_FILE")
+    fi
+}
+build_compose
 
 env_get() {
     grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -n1 | cut -d= -f2- || true
@@ -76,6 +82,12 @@ else
     warn "archive has no .env — keeping the current one"
 fi
 
+# Rebuild the compose command now that the archive's .env (if any) is in
+# place, so --env-file is picked up even on a server that had no .env.
+build_compose
+[[ -f "$ENV_FILE" ]] \
+    || die "no .env on disk and none in the archive — cannot start the stack (compose requires env_file ../.env)."
+
 if [[ -f "$TMP_DIR/VERSION" && -f "$APP_DIR/VERSION" ]]; then
     backup_version="$(cat "$TMP_DIR/VERSION")"
     current_version="$(cat "$APP_DIR/VERSION")"
@@ -105,6 +117,19 @@ for _ in $(seq 1 30); do
     sleep 2
 done
 [[ "$pg_ready" -eq 1 ]] || die "postgres did not become ready — aborting before touching data."
+
+# Sync the postgres role password with the restored .env: the cluster's
+# volume may have been initialized with a different POSTGRES_PASSWORD
+# than the one in the archive, which would leave the api unable to
+# authenticate. psql over the trusted local socket needs no password.
+PG_PASSWORD="$(env_get POSTGRES_PASSWORD)"
+if [[ -n "$PG_PASSWORD" ]]; then
+    log "syncing postgres password for role ${PG_USER} with the restored .env"
+    "${COMPOSE[@]}" exec -T postgres psql -U "$PG_USER" -d postgres -v ON_ERROR_STOP=1 \
+        -c "ALTER USER \"$PG_USER\" WITH PASSWORD '${PG_PASSWORD//\'/\'\'}';" >/dev/null
+else
+    warn "restored .env has no POSTGRES_PASSWORD — skipping role password sync"
+fi
 
 log "dropping and recreating database ${PG_DB}"
 "${COMPOSE[@]}" exec -T postgres psql -U "$PG_USER" -d postgres -v ON_ERROR_STOP=1 \

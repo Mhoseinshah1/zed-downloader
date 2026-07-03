@@ -17,9 +17,10 @@
 
 	# Route order matters — most specific first, catch-all last.
 
-	# 1) Telegram webhook updates -> bot webhook server (port 8080).
+	# 1) Telegram webhook updates -> bot webhook server (WEBHOOK_PORT,
+	#    default 8080). NOTE: restart the proxy after changing it.
 	handle /webhook/telegram* {
-		reverse_proxy bot:8080
+		reverse_proxy bot:{$WEBHOOK_PORT:8080}
 	}
 
 	# 2) Backend API, payment callbacks, health probe -> FastAPI (port 8000).

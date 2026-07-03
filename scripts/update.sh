@@ -74,7 +74,12 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 log "current version: ${PREV_VERSION} (${PREV_COMMIT:0:8}, branch ${BRANCH})"
 
 log "step 1/4 — pre-update backup"
-bash "$APP_DIR/scripts/backup.sh"
+# backup.sh prints the archive path as its last stdout line — capture it
+# so the rollback path below can restore the database, not just the code.
+BACKUP_ARCHIVE="$(bash "$APP_DIR/scripts/backup.sh" | tail -n1)"
+[[ -n "$BACKUP_ARCHIVE" && -f "$BACKUP_ARCHIVE" ]] \
+    || die "pre-update backup did not produce an archive — refusing to update."
+log "pre-update backup: $BACKUP_ARCHIVE"
 
 log "step 2/4 — fetching latest code"
 git fetch origin
@@ -102,12 +107,16 @@ fi
 # ------------------------------------------------------------------ rollback
 err "health check failed after update — rolling back to ${PREV_COMMIT:0:8} (v${PREV_VERSION})"
 git reset --hard "$PREV_COMMIT"
-"${COMPOSE[@]}" up -d --build
 
-if wait_healthy 45; then
+# Restore the pre-update backup so the database matches the rolled-back
+# code (the failed update may have migrated the schema forward).
+# restore.sh stops the services, drops/recreates the DB, imports the
+# dump, rebuilds the stack and waits for the API health check itself.
+log "restoring pre-update backup: $BACKUP_ARCHIVE"
+if FORCE=1 bash "$APP_DIR/scripts/restore.sh" "$BACKUP_ARCHIVE"; then
     log "rollback complete — stack healthy again on v${PREV_VERSION}"
 else
-    err "stack still unhealthy after rollback — inspect with: zed-downloader logs api"
+    err "restore failed or stack still unhealthy after rollback — inspect with: zed-downloader logs api"
 fi
 
 record_update "$PREV_VERSION" "$NEW_VERSION" "rolled_back" "cli update failed health check"
