@@ -1,0 +1,271 @@
+/* Page-specific styles: login, dashboard, users, stubs, tables. */
+
+/* Login */
+.login-page {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.login-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 28px;
+  width: 100%;
+  max-width: 380px;
+}
+
+.login-card__head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.login-card__title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.login-card__subtitle {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.login-card__lang {
+  align-self: center;
+  font-size: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field__label {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Dashboard */
+.stats-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+.stat-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px;
+}
+
+.stat-card--accent {
+  border-color: var(--accent);
+}
+
+.stat-card__label {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.stat-card__value {
+  font-size: 26px;
+  font-weight: 700;
+}
+
+.panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.panel__title {
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chip {
+  align-items: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 8px;
+  padding: 4px 12px;
+}
+
+.chip__label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.chip__value {
+  font-weight: 700;
+}
+
+/* Health badges */
+.health-badge {
+  align-items: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 8px;
+  padding: 4px 12px;
+}
+
+.health-badge__dot {
+  border-radius: 50%;
+  height: 9px;
+  width: 9px;
+}
+
+.health-badge--ok .health-badge__dot {
+  background: var(--success);
+}
+
+.health-badge--ok .health-badge__status {
+  color: var(--success);
+}
+
+.health-badge--error .health-badge__dot {
+  background: var(--danger);
+}
+
+.health-badge--error .health-badge__status {
+  color: var(--danger);
+}
+
+.health-badge--unknown .health-badge__dot {
+  background: var(--text-muted);
+}
+
+.health-badge--unknown .health-badge__status {
+  color: var(--text-muted);
+}
+
+.health-badge__label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.health-badge__status {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* Users */
+.search-bar {
+  display: flex;
+  gap: 10px;
+}
+
+.search-bar input {
+  max-width: 420px;
+}
+
+/* Table */
+.table-wrap {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.table th,
+.table td {
+  border-block-end: 1px solid var(--border);
+  padding: 10px 14px;
+  text-align: start;
+  white-space: nowrap;
+}
+
+.table th {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.table tbody tr:last-child td {
+  border-block-end: none;
+}
+
+.table tbody tr:hover {
+  background: var(--bg-elevated);
+}
+
+.table__empty {
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* Pager */
+.pager {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.pager__info {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Stub pages */
+.stub-card {
+  align-items: center;
+  background: var(--bg-card);
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 60px 20px;
+}
+
+.stub-card__badge {
+  background: var(--accent-soft);
+  border-radius: 999px;
+  color: var(--accent);
+  font-weight: 700;
+  padding: 6px 18px;
+}
+
+.stub-card__text {
+  color: var(--text-muted);
+}

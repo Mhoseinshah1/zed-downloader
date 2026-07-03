@@ -1,0 +1,156 @@
+/* App shell: sidebar + topbar + content. Direction-agnostic thanks to
+   flexbox + logical properties — flipping <html dir> mirrors the layout. */
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* Sidebar */
+.sidebar {
+  background: var(--bg-card);
+  border-inline-end: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  max-height: 100vh;
+  position: sticky;
+  top: 0;
+  width: 240px;
+}
+
+.sidebar__brand {
+  align-items: center;
+  border-block-end: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+  padding: 16px;
+}
+
+.sidebar__logo {
+  align-items: center;
+  background: var(--accent);
+  border-radius: 8px;
+  color: #ffffff;
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: 18px;
+  font-weight: 700;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.sidebar__title {
+  font-weight: 700;
+}
+
+.sidebar__subtitle {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.sidebar__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.sidebar__link {
+  border-inline-start: 2px solid transparent;
+  border-radius: 8px;
+  color: var(--text-muted);
+  display: block;
+  padding: 8px 12px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.sidebar__link:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+
+.sidebar__link--active {
+  background: var(--accent-soft);
+  border-inline-start-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Main column */
+.main-area {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.topbar {
+  align-items: center;
+  background: var(--bg-card);
+  border-block-end: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 20px;
+}
+
+.topbar__side {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.topbar__email {
+  color: var(--text-muted);
+  direction: ltr;
+  font-size: 13px;
+  unicode-bidi: isolate;
+}
+
+.topbar__lang {
+  font-weight: 700;
+  min-width: 44px;
+}
+
+.content {
+  flex: 1;
+  padding: 24px;
+}
+
+/* Generic page scaffolding */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin: 0 auto;
+  max-width: 1200px;
+}
+
+.page__head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.page__title {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.page__meta {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Narrow screens: collapse sidebar to labels-only strip */
+@media (max-width: 800px) {
+  .sidebar {
+    width: 170px;
+  }
+
+  .content {
+    padding: 14px;
+  }
+}
