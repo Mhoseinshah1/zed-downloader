@@ -2,23 +2,40 @@
 (with provider fallback) -> upload to the Telegram chat -> consume quota
 AFTER the upload succeeded -> bookkeeping on download_requests.
 
+Also runs periodic housekeeping:
+- sweeps download requests orphaned by a crash/restart (BLPOP is
+  at-most-once; NOTE: v2 = ack-based queue via BLMOVE),
+- re-verifies pending payments whose gateway callback never completed, so
+  charged users get their subscription without reopening the callback URL.
+
 Run with: python -m app.workers.runner
 """
 import asyncio
+import datetime as dt
 import logging
 import os
 import shutil
 import tempfile
 
+from sqlalchemy import and_, or_, select
+
 from app.config import get_settings
 from app.database import SessionLocal, utcnow
-from app.models import DownloadRequest
+from app.models import DownloadRequest, Payment, User
 from app.providers.base import DownloadError, DownloadResult, ProviderException
 from app.providers.manager import manager
+from app.services.payment_service import verify_and_activate
 from app.services.subscription_service import consume_download
 from app.workers.queue import dequeue
 
 log = logging.getLogger("zed.worker")
+
+HOUSEKEEPING_INTERVAL_SECONDS = 300
+# Only reconcile payments old enough that the gateway's payment window has
+# passed (avoid failing payments still in progress) and young enough to
+# still be meaningful.
+RECONCILE_MIN_AGE = dt.timedelta(minutes=30)
+RECONCILE_MAX_AGE = dt.timedelta(hours=24)
 
 # Per-error user-facing messages. fa is the primary market language; en is
 # the fallback. NOTE: panel-managed bot_texts overrides are a v2 seam.
@@ -45,6 +62,11 @@ ERROR_TEXT: dict[str, dict[str, str]] = {
         "unknown_error": "An unexpected error occurred. Please try again.",
         "upload_failed": "The download finished but sending the file to Telegram failed. Please try again.",
     },
+}
+
+PAYMENT_CONFIRMED_TEXT = {
+    "fa": "✅ پرداخت شما تأیید شد و اشتراک‌تان فعال است.",
+    "en": "✅ Your payment was verified and your subscription is now active.",
 }
 
 
@@ -104,6 +126,24 @@ async def _fail(session, request: DownloadRequest, code: str) -> None:
     await session.commit()
 
 
+def _cleanup_when_done(task: asyncio.Task, dest_dir: str) -> None:
+    """A timed-out provider call keeps running in its thread (yt-dlp cannot
+    be force-stopped in-process; NOTE: v2 = subprocess isolation for a hard
+    abort). Defer directory removal until it actually finishes — deleting
+    files that are still being written would corrupt nothing durable but
+    leak partial data and confuse the provider."""
+
+    def _done(finished: asyncio.Task) -> None:
+        try:
+            exc = finished.exception()
+            log.info("late download for %s finished (%s)", dest_dir, exc or "discarding result")
+        except asyncio.CancelledError:
+            pass
+        shutil.rmtree(dest_dir, ignore_errors=True)
+
+    task.add_done_callback(_done)
+
+
 async def process_job(bot, payload: dict) -> None:
     settings = get_settings()
     request_id = payload.get("request_id")
@@ -120,15 +160,28 @@ async def process_job(bot, payload: dict) -> None:
         request.started_at = utcnow()
         await session.commit()
 
-        os.makedirs(settings.TEMP_DIR, exist_ok=True)
-        dest_dir = tempfile.mkdtemp(prefix=f"req{request.id}-", dir=settings.TEMP_DIR)
+        dest_dir: str | None = None
+        cleanup_now = True
         try:
+            os.makedirs(settings.TEMP_DIR, exist_ok=True)
+            dest_dir = tempfile.mkdtemp(prefix=f"req{request.id}-", dir=settings.TEMP_DIR)
+
+            async def _run_download():
+                # Own session: the job session must stay usable for failure
+                # bookkeeping even if this task outlives the timeout below.
+                async with SessionLocal() as dl_session:
+                    return await manager.download(
+                        dl_session, request.url, request.platform_id, dest_dir
+                    )
+
+            download_task = asyncio.create_task(_run_download())
             try:
                 provider_row, result = await asyncio.wait_for(
-                    manager.download(session, request.url, request.platform_id, dest_dir),
-                    timeout=settings.DOWNLOAD_TIMEOUT_SECONDS,
+                    asyncio.shield(download_task), timeout=settings.DOWNLOAD_TIMEOUT_SECONDS
                 )
             except (TimeoutError, asyncio.TimeoutError):
+                cleanup_now = False
+                _cleanup_when_done(download_task, dest_dir)
                 await _fail(session, request, DownloadError.PROVIDER_DOWN.value)
                 await _send_text(bot, chat_id, error_text(lang, "provider_down"))
                 return
@@ -166,8 +219,116 @@ async def process_job(bot, payload: dict) -> None:
             request.completed_at = utcnow()
             await session.commit()
             log.info("request %s completed via provider %s", request.id, provider_row.slug)
+        except Exception:
+            # Anything unexpected (DB hiccup, provider bug) must not leave the
+            # row stuck in "processing" — a stuck row silently occupies quota.
+            log.exception("unexpected error processing request %s", request_id)
+            await session.rollback()
+            try:
+                request = await session.get(DownloadRequest, request_id)
+                if request is not None and request.status == "processing":
+                    await _fail(session, request, DownloadError.UNKNOWN_ERROR.value)
+            except Exception:
+                log.exception("could not mark request %s failed", request_id)
+            await _send_text(bot, chat_id, error_text(lang, "unknown_error"))
         finally:
-            shutil.rmtree(dest_dir, ignore_errors=True)
+            if cleanup_now and dest_dir:
+                shutil.rmtree(dest_dir, ignore_errors=True)
+
+
+# --- Housekeeping ------------------------------------------------------------
+
+
+async def sweep_stale_requests() -> None:
+    """Fail requests orphaned by a worker crash/restart so they stop
+    occupying quota and history. Runs at startup and periodically."""
+    settings = get_settings()
+    now = utcnow()
+    stale_processing_before = now - dt.timedelta(seconds=settings.DOWNLOAD_TIMEOUT_SECONDS * 2)
+    stale_queued_before = now - dt.timedelta(hours=6)
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(DownloadRequest).where(
+                or_(
+                    and_(
+                        DownloadRequest.status == "processing",
+                        DownloadRequest.started_at < stale_processing_before,
+                    ),
+                    and_(
+                        DownloadRequest.status == "queued",
+                        DownloadRequest.created_at < stale_queued_before,
+                    ),
+                )
+            )
+        )
+        rows = list(result.scalars())
+        for row in rows:
+            row.status = "failed"
+            row.error_code = DownloadError.UNKNOWN_ERROR.value
+            row.completed_at = now
+        if rows:
+            await session.commit()
+            # NOTE: no user notification here — too late to be useful.
+            log.warning("swept %d stale download request(s)", len(rows))
+
+
+async def reconcile_pending_payments(bot) -> None:
+    """Re-verify pending payments whose callback never completed (this is
+    what makes the callback page's 'verification will be retried' true).
+    verify_and_activate is idempotent and race-safe, so overlapping with a
+    late user-initiated callback is harmless."""
+    now = utcnow()
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(Payment.id, Payment.authority, Payment.user_id)
+            .where(
+                Payment.status == "pending",
+                Payment.authority.is_not(None),
+                Payment.created_at < now - RECONCILE_MIN_AGE,
+                Payment.created_at > now - RECONCILE_MAX_AGE,
+            )
+            .limit(50)
+        )
+        candidates = result.all()
+
+    for payment_id, authority, user_id in candidates:
+        async with SessionLocal() as session:
+            outcome = await verify_and_activate(session, authority=authority)
+            if outcome.status != "success":
+                continue
+            log.info("reconciled payment %s (ref %s)", payment_id, outcome.ref_id)
+            user = await session.get(User, user_id)
+        if user is not None:
+            text = PAYMENT_CONFIRMED_TEXT.get(user.language) or PAYMENT_CONFIRMED_TEXT["en"]
+            await _send_text(bot, user.telegram_id, text)
+
+
+async def housekeeping_loop(bot) -> None:
+    while True:
+        try:
+            await sweep_stale_requests()
+            await reconcile_pending_payments(bot)
+        except Exception:
+            log.exception("housekeeping error")
+        await asyncio.sleep(HOUSEKEEPING_INTERVAL_SECONDS)
+
+
+# --- Entry point -----------------------------------------------------------------
+
+
+def _build_bot():
+    """Bot pointed at TELEGRAM_API_URL when configured (self-hosted
+    telegram-bot-api lifts the ~50 MB upload cap); official API otherwise."""
+    from aiogram import Bot  # lazy: keeps module importable without aiogram
+
+    settings = get_settings()
+    if settings.TELEGRAM_API_URL:
+        from aiogram.client.session.aiohttp import AiohttpSession
+        from aiogram.client.telegram import TelegramAPIServer
+
+        server = TelegramAPIServer.from_base(settings.TELEGRAM_API_URL.rstrip("/"))
+        return Bot(token=settings.BOT_TOKEN, session=AiohttpSession(api=server))
+    return Bot(token=settings.BOT_TOKEN)
 
 
 async def main() -> None:
@@ -175,23 +336,25 @@ async def main() -> None:
     settings = get_settings()
     os.makedirs(settings.TEMP_DIR, exist_ok=True)
 
-    from aiogram import Bot  # lazy: keeps module importable without aiogram
-
-    bot = Bot(token=settings.BOT_TOKEN)
+    bot = _build_bot()
+    housekeeper = asyncio.create_task(housekeeping_loop(bot))
     log.info("worker started, waiting for jobs on the queue")
-    while True:
-        try:
-            payload = await dequeue(timeout=5)
-        except Exception as exc:  # redis hiccup — back off and retry
-            log.error("queue error: %s", exc)
-            await asyncio.sleep(3)
-            continue
-        if payload is None:
-            continue
-        try:
-            await process_job(bot, payload)
-        except Exception:
-            log.exception("unhandled error processing job %s", payload)
+    try:
+        while True:
+            try:
+                payload = await dequeue(timeout=5)
+            except Exception as exc:  # redis hiccup — back off and retry
+                log.error("queue error: %s", exc)
+                await asyncio.sleep(3)
+                continue
+            if payload is None:
+                continue
+            try:
+                await process_job(bot, payload)
+            except Exception:
+                log.exception("unhandled error processing job %s", payload)
+    finally:
+        housekeeper.cancel()
 
 
 if __name__ == "__main__":

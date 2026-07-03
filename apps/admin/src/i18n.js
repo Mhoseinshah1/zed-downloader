@@ -86,6 +86,7 @@ const messages = {
     "status.completed": "موفق",
     "status.failed": "ناموفق",
     "status.cancelled": "لغو شده",
+    "status.denied": "رد شده",
 
     "users.searchPlaceholder": "جستجو بر اساس نام کاربری یا شناسه…",
     "users.searchBtn": "جستجو",
@@ -174,6 +175,7 @@ const messages = {
     "status.completed": "Completed",
     "status.failed": "Failed",
     "status.cancelled": "Cancelled",
+    "status.denied": "Denied",
 
     "users.searchPlaceholder": "Search by username or ID…",
     "users.searchBtn": "Search",

@@ -24,10 +24,15 @@ class ZarinpalGateway(BasePaymentProvider):
     @staticmethod
     def _amount_in_rials(amount: Decimal, currency: str) -> int:
         # Zarinpal v4 amounts are in Rials (IRR). Our plans are priced in
-        # Toman (IRT) by default: 1 Toman = 10 Rials.
-        if currency.upper() in ("IRT", "TOMAN"):
-            return int(amount) * 10
-        return int(amount)
+        # Toman (IRT) by default: 1 Toman = 10 Rials. Reject anything that
+        # does not convert to a whole number of Rials — silently truncating
+        # would charge less than the recorded payment amount.
+        rials = amount * 10 if currency.upper() in ("IRT", "TOMAN") else Decimal(amount)
+        if rials != rials.to_integral_value():
+            raise PaymentGatewayError(
+                f"amount {amount} {currency} is not an integral number of Rials"
+            )
+        return int(rials)
 
     async def _post(self, path: str, payload: dict) -> dict:
         try:

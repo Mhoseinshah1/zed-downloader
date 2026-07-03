@@ -91,8 +91,10 @@ class ProviderManager:
 
         last_exc: ProviderException | None = None
         for row in rows:
-            provider = build_provider(row)
             try:
+                # Inside the try: a misconfigured row (unknown type, broken
+                # key decryption) must fall back, not abort the request.
+                provider = build_provider(row)
                 result = await provider.download(url, dest_dir)
                 return row, result
             except ProviderException as exc:

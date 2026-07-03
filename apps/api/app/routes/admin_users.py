@@ -30,8 +30,14 @@ async def list_users(
             User.first_name.ilike(like),
             User.last_name.ilike(like),
         ]
-        if search.lstrip("-").isdigit():
-            clauses.append(User.telegram_id == int(search))
+        try:
+            numeric = int(search)
+        except ValueError:
+            numeric = None
+        # Only bind values that fit the BIGINT column — an out-of-range
+        # literal would make the whole query error out.
+        if numeric is not None and -(2**63) <= numeric < 2**63:
+            clauses.append(User.telegram_id == numeric)
         query = query.where(or_(*clauses))
 
     total = int(

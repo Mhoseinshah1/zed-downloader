@@ -66,14 +66,22 @@ export default function Dashboard() {
 
       {!loading && stats && (
         <div className="stats-grid">
-          {STAT_FIELDS.map(({ field, key, accent }) => (
-            <StatCard
-              key={field}
-              label={t(key)}
-              value={formatNumber(locale, stats[field])}
-              accent={accent}
-            />
-          ))}
+          {STAT_FIELDS.map(({ field, key, accent }) => {
+            let value = stats[field];
+            // queue_length is -1 when Redis is unreachable; show the dash
+            // placeholder instead of a bogus count (formatNumber maps null to it).
+            if (field === "queue_length" && Number(value) < 0) {
+              value = null;
+            }
+            return (
+              <StatCard
+                key={field}
+                label={t(key)}
+                value={formatNumber(locale, value)}
+                accent={accent}
+              />
+            );
+          })}
         </div>
       )}
 
@@ -81,12 +89,19 @@ export default function Dashboard() {
         <section className="panel">
           <h2 className="panel__title">{t("dash.byStatus")}</h2>
           <div className="chip-row">
-            {Object.entries(byStatus).map(([status, count]) => (
-              <span key={status} className="chip">
-                <span className="chip__label">{t(`status.${status}`)}</span>
-                <span className="chip__value">{formatNumber(locale, count)}</span>
-              </span>
-            ))}
+            {Object.entries(byStatus).map(([status, count]) => {
+              // Fall back to the raw status when no translation exists
+              // (t() echoes the key back), so unknown statuses degrade gracefully.
+              const label = t(`status.${status}`);
+              return (
+                <span key={status} className="chip">
+                  <span className="chip__label">
+                    {label === `status.${status}` ? status : label}
+                  </span>
+                  <span className="chip__value">{formatNumber(locale, count)}</span>
+                </span>
+              );
+            })}
           </div>
         </section>
       )}

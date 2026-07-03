@@ -158,13 +158,13 @@ async def zarinpal_callback(
                 outcome.ref_id,
             )
         )
-    if outcome.status == "gateway_error":
+    if outcome.status in ("gateway_error", "activation_blocked"):
         return HTMLResponse(
             _render_result(
                 "⏳",
-                "در انتظار تأیید",
-                "درگاه پرداخت موقتاً پاسخ نمی‌دهد. اگر مبلغ کسر شده، به‌زودی به‌صورت خودکار تأیید می‌شود.",
-                "The gateway is temporarily unreachable. If you were charged, verification will be retried.",
+                "در انتظار بررسی",
+                "پرداخت شما ثبت شد اما تأیید نهایی هنوز انجام نشده است. اگر مبلغ کسر شده، موضوع به‌صورت خودکار یا توسط پشتیبانی پیگیری می‌شود.",
+                "Your payment was recorded but final confirmation is still pending. If you were charged, it will be followed up automatically or by support.",
             ),
             status_code=502,
         )

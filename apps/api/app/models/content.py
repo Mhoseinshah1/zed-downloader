@@ -20,6 +20,11 @@ class DownloadRequest(Base):
     # pending | queued | processing | completed | failed | denied
     status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False, index=True)
     error_code: Mapped[str | None] = mapped_column(String(32))  # DownloadError value on failure
+    # Entitlement that admitted this request (set at admission time):
+    # free | user_sub | group_sub | group_quota. Quota accounting counts
+    # in-flight rows and debits completions against exactly this entitlement.
+    consumed_from: Mapped[str | None] = mapped_column(String(16), index=True)
+    subscription_id: Mapped[int | None] = mapped_column(ForeignKey("subscriptions.id"))
     file_name: Mapped[str | None] = mapped_column(String(512))
     file_size: Mapped[int | None] = mapped_column(BigInteger)
     file_type: Mapped[str | None] = mapped_column(String(16))  # video | audio | photo | document

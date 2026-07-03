@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # Telegram
     BOT_TOKEN: str = ""
     BOT_USERNAME: str = ""
+    # Self-hosted telegram-bot-api server (e.g. http://telegram-api:8081).
+    # Empty = the official api.telegram.org, which caps bot uploads at ~50 MB.
+    TELEGRAM_API_URL: str = ""
 
     # Owner admin seeded on first start (see app/seed.py)
     OWNER_ADMIN_EMAIL: str = "admin@example.com"
@@ -53,9 +56,19 @@ class Settings(BaseSettings):
     DOMAIN: str = ""
     CORS_ORIGINS: str = "*"
 
+    # The official Bot API rejects bot uploads bigger than ~50 MB.
+    OFFICIAL_BOT_API_UPLOAD_CAP_MB: int = 50
+
     @property
     def max_file_size_bytes(self) -> int:
-        return self.MAX_FILE_SIZE_MB * 1024 * 1024
+        """Effective download size cap. Clamped to the official Bot API's
+        upload limit unless a self-hosted TELEGRAM_API_URL is configured —
+        otherwise files between 50 MB and MAX_FILE_SIZE_MB would be fully
+        downloaded only to always fail at upload."""
+        effective_mb = self.MAX_FILE_SIZE_MB
+        if not self.TELEGRAM_API_URL:
+            effective_mb = min(effective_mb, self.OFFICIAL_BOT_API_UPLOAD_CAP_MB)
+        return effective_mb * 1024 * 1024
 
     @property
     def cors_origins_list(self) -> list[str]:

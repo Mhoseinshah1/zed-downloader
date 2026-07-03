@@ -101,8 +101,13 @@ async def _process_download(
         return
 
     if status == "error":
-        # Only reason in the contract is "unsupported_url".
-        await message.reply(t(lang, "download.unsupported_url"))
+        # The contract carries reason "unsupported_url" or "queue_unavailable";
+        # only the former should read as a bad link — anything else (queue
+        # outage, unknown reason) gets the generic "try again later" message.
+        if result.get("reason") == "unsupported_url":
+            await message.reply(t(lang, "download.unsupported_url"))
+        else:
+            await message.reply(t(lang, "download.denied.generic"))
         return
 
     logger.warning("Unexpected download/request response: %r", result)

@@ -77,11 +77,18 @@ async def activate_subscription(session: AsyncSession, payment: Payment) -> Subs
     plan = await session.get(Plan, payment.plan_id)
     if plan is None:  # defensive: FK guarantees this in practice
         raise PaymentGatewayError(f"payment {payment.id} references missing plan {payment.plan_id}")
+    if plan.scope != "user":
+        # Backstop for the guard in the payment-creation route (closes the
+        # window where an admin flips a plan's scope mid-payment). Raising
+        # here rolls the transaction back, so the payment stays visible as
+        # pending for manual refund instead of silently crediting nobody.
+        # NOTE: group-scope purchase (setting group_id) is a v2 seam.
+        raise PaymentGatewayError(
+            f"plan {plan.id} has scope '{plan.scope}' — only user-scope plans are activatable"
+        )
     now = utcnow()
     subscription = Subscription(
-        # NOTE: MVP sells user-scope plans through the bot; group-scope
-        # purchase (setting group_id here) is a v2 seam.
-        user_id=payment.user_id if plan.scope == "user" else None,
+        user_id=payment.user_id,
         group_id=None,
         plan_id=plan.id,
         starts_at=now,
@@ -154,7 +161,14 @@ async def verify_and_activate(
     payment.status = "success"
     payment.transaction_id = str(verdict.ref_id)
     payment.paid_at = utcnow()
-    await activate_subscription(session, payment)
+    try:
+        await activate_subscription(session, payment)
+    except PaymentGatewayError as exc:
+        # Activation refused (e.g. plan scope changed mid-payment). Roll
+        # everything back: the payment stays pending and visible for manual
+        # refund — the user paid but must never be silently mis-credited.
+        await session.rollback()
+        return VerifyOutcome(False, "activation_blocked", message=str(exc))
     try:
         await session.commit()
     except IntegrityError:

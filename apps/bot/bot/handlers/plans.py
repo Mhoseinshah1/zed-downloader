@@ -1,6 +1,7 @@
 """/plans command and buy:<plan_id> purchase callbacks."""
 
 import html
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from aiogram import F, Router
@@ -14,6 +15,19 @@ from bot.services import api_client
 router = Router(name="plans")
 
 
+def format_price(value: Any) -> str:
+    """Thousands-separated price string.
+
+    The API serializes ``plan.price`` (a Decimal) as a JSON string, e.g.
+    ``"190000.00"``, so coerce via Decimal (not float, which would round)
+    before applying numeric formatting; fall back to the raw value.
+    """
+    try:
+        return f"{Decimal(str(value)):,}"
+    except InvalidOperation:
+        return str(value)
+
+
 def render_plans_text(plans: list[dict[str, Any]], lang: str) -> str:
     """Title plus one formatted line per plan."""
     lines = [t(lang, "plans.title"), ""]
@@ -25,7 +39,7 @@ def render_plans_text(plans: list[dict[str, Any]], lang: str) -> str:
                 lang,
                 "plans.item",
                 name=html.escape(str(plan.get("name", ""))),
-                price=f"{plan.get('price', 0):,}",
+                price=format_price(plan.get("price", 0)),
                 currency=html.escape(str(plan.get("currency", ""))),
                 duration_days=plan.get("duration_days", 0),
                 download_limit=plan.get("download_limit", 0),

@@ -158,6 +158,10 @@ async def download_request(body: DownloadRequestIn, db: AsyncSession = Depends(g
         url_hash=url_hash,
         platform_id=platform.id,
         status="queued",
+        # Tag the entitlement that admitted this request; quota accounting
+        # counts in-flight rows and debits completions against exactly it.
+        consumed_from=verdict.granted_via,
+        subscription_id=verdict.subscription.id if verdict.subscription else None,
     )
     db.add(request)
     await db.commit()
@@ -213,6 +217,10 @@ async def payments_create(body: PaymentCreateIn, db: AsyncSession = Depends(get_
     plan = await db.get(Plan, body.plan_id)
     if plan is None or not plan.is_active:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "plan not found or inactive")
+    if plan.scope != "user":
+        # Group-scope purchase through the bot is a v2 seam; selling it here
+        # would charge the user for a subscription nobody can use.
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "plan is not purchasable by users")
     try:
         payment, payment_url = await create_payment_record(
             db, user=user, plan=plan, gateway_name=body.gateway
