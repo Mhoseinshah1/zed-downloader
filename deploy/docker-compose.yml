@@ -1,0 +1,139 @@
+# ==========================================================================
+# zed-downloader — production compose stack.
+#
+# All relative paths in this file (env_file ../.env, build contexts,
+# Caddyfile mount) are resolved against this file's directory (deploy/).
+# For ${VAR} interpolation to read the root .env, invoke compose with an
+# explicit --env-file (do NOT use --project-directory — it would
+# re-anchor the relative paths above away from deploy/):
+#
+#   docker compose -f deploy/docker-compose.yml --env-file /opt/zed-downloader/.env up -d
+#
+# scripts/manage.sh (installed as the `zed-downloader` CLI) does this
+# for you. Every interpolated variable has a default so that
+# `docker compose config` succeeds even with a bare .env.
+# ==========================================================================
+
+name: zed-downloader
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: zed_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-zed_downloader}
+      POSTGRES_USER: ${POSTGRES_USER:-zed}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      TZ: ${TZ:-Asia/Tehran}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # $$ escapes interpolation: expanded inside the container.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: zed_redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../apps/api
+    container_name: zed_api
+    # Image ENTRYPOINT is /entrypoint.sh; "api" role runs
+    # migrations + seed, then uvicorn on :8000.
+    command: ["api"]
+    env_file:
+      - ../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # NOTE: requires curl inside the api image (apps/api Dockerfile).
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ../apps/api
+    container_name: zed_worker
+    # Same image as api; "worker" role runs python -m app.workers.runner.
+    command: ["worker"]
+    env_file:
+      - ../.env
+    depends_on:
+      api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  bot:
+    build:
+      context: ../apps/bot
+    container_name: zed_bot
+    env_file:
+      - ../.env
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  admin:
+    build:
+      context: ../apps/admin
+    container_name: zed_admin
+    # nginx serves the built panel on container port 80 (proxied by Caddy).
+    restart: unless-stopped
+
+  proxy:
+    image: caddy:2-alpine
+    container_name: zed_proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@localhost}
+    depends_on:
+      - api
+      - admin
+      - bot
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  # Shared default network for every service above.
+  default:
+    name: zed_network

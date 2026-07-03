@@ -1,0 +1,262 @@
+#!/usr/bin/env bash
+# ==========================================================================
+# zed-downloader — one-command installer for Ubuntu servers.
+#
+# Interactive:
+#   sudo bash install.sh
+#
+# Non-interactive (pre-set any prompt variable to skip its prompt):
+#   sudo BOT_TOKEN=... BOT_USERNAME=... OWNER_TELEGRAM_ID=... \
+#        DOMAIN=... ACME_EMAIL=... OWNER_ADMIN_EMAIL=... \
+#        OWNER_ADMIN_PASSWORD=... bash install.sh
+# ==========================================================================
+set -euo pipefail
+
+# ------------------------------------------------------------------ helpers
+C_GREEN=$'\033[1;32m'
+C_YELLOW=$'\033[1;33m'
+C_RED=$'\033[1;31m'
+C_RESET=$'\033[0m'
+
+log()  { echo "${C_GREEN}[zed]${C_RESET} $*"; }
+warn() { echo "${C_YELLOW}[zed] WARN:${C_RESET} $*" >&2; }
+err()  { echo "${C_RED}[zed] ERROR:${C_RESET} $*" >&2; }
+die()  { err "$*"; exit 1; }
+
+INSTALL_DIR="/opt/zed-downloader"
+REPO_URL="${REPO_URL:-https://github.com/mhoseinshah1/zed-downloader.git}"
+
+# prompt_var VAR "question" [default]
+# Uses the pre-set environment variable when present (non-interactive
+# mode); otherwise asks on the terminal. Empty answers are rejected
+# unless a default exists.
+prompt_var() {
+    local var="$1" question="$2" default="${3:-}" value
+    if [[ -n "${!var:-}" ]]; then
+        log "$var: provided via environment"
+        return 0
+    fi
+    if [[ ! -t 0 ]]; then
+        if [[ -n "$default" ]]; then
+            printf -v "$var" '%s' "$default"
+            warn "no TTY: using default for $var ($default)"
+            return 0
+        fi
+        die "no TTY and \$$var is not set — export $var for non-interactive install"
+    fi
+    while true; do
+        if [[ -n "$default" ]]; then
+            read -rp "  $question [$default]: " value
+            value="${value:-$default}"
+        else
+            read -rp "  $question: " value
+        fi
+        [[ -n "$value" ]] && break
+        echo "  a value is required."
+    done
+    printf -v "$var" '%s' "$value"
+}
+
+# ------------------------------------------------------- root + OS detection
+[[ "${EUID}" -eq 0 ]] || die "this installer must run as root (use sudo)."
+
+if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    if [[ "${ID:-}" == "ubuntu" && ( "${VERSION_ID:-}" == "22.04" || "${VERSION_ID:-}" == "24.04" ) ]]; then
+        log "detected Ubuntu ${VERSION_ID}"
+    else
+        warn "untested OS: ${PRETTY_NAME:-unknown} — Ubuntu 22.04/24.04 is recommended. Continuing anyway."
+    fi
+else
+    warn "/etc/os-release not found — cannot detect OS. Continuing anyway."
+fi
+
+# --------------------------------------------------------------- base tools
+export DEBIAN_FRONTEND=noninteractive
+
+need_pkgs=()
+command -v git     >/dev/null 2>&1 || need_pkgs+=(git)
+command -v curl    >/dev/null 2>&1 || need_pkgs+=(curl)
+command -v openssl >/dev/null 2>&1 || need_pkgs+=(openssl)
+if [[ ${#need_pkgs[@]} -gt 0 ]]; then
+    log "installing packages: ${need_pkgs[*]}"
+    apt-get update -qq
+    apt-get install -y -qq "${need_pkgs[@]}" ca-certificates
+fi
+
+# --------------------------------------------------------------------- docker
+if ! command -v docker >/dev/null 2>&1; then
+    log "Docker not found — installing via get.docker.com"
+    tmp_script="$(mktemp)"
+    curl -fsSL https://get.docker.com -o "$tmp_script"
+    sh "$tmp_script"
+    rm -f "$tmp_script"
+fi
+
+if ! docker compose version >/dev/null 2>&1; then
+    log "docker compose plugin missing — trying apt"
+    apt-get update -qq
+    apt-get install -y -qq docker-compose-plugin || true
+fi
+docker compose version >/dev/null 2>&1 \
+    || die "the 'docker compose' plugin is required but could not be installed."
+
+systemctl enable --now docker >/dev/null 2>&1 || true
+
+# ------------------------------------------------------------- repo location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)"; then
+    APP_DIR="$REPO_ROOT"
+    log "running from an existing checkout — installing in place: $APP_DIR"
+else
+    APP_DIR="$INSTALL_DIR"
+    if [[ -d "$APP_DIR/.git" ]]; then
+        log "using existing clone at $APP_DIR"
+    else
+        log "cloning $REPO_URL -> $APP_DIR"
+        git clone "$REPO_URL" "$APP_DIR"
+    fi
+fi
+
+# Keep the canonical path working even for non-standard checkouts, so
+# the zed-downloader CLI (default ZED_DIR=/opt/zed-downloader) finds it.
+if [[ "$APP_DIR" != "$INSTALL_DIR" && ! -e "$INSTALL_DIR" ]]; then
+    ln -s "$APP_DIR" "$INSTALL_DIR"
+    log "symlinked $INSTALL_DIR -> $APP_DIR"
+fi
+
+cd "$APP_DIR"
+
+# ------------------------------------------------------------------- prompts
+log "configuration — answers are written to $APP_DIR/.env"
+prompt_var BOT_TOKEN            "Telegram bot token (from @BotFather)"
+prompt_var BOT_USERNAME         "Bot username, without @"
+prompt_var OWNER_TELEGRAM_ID    "Owner's numeric Telegram ID"
+prompt_var DOMAIN               "Public domain pointing at this server (e.g. dl.example.com)"
+prompt_var ACME_EMAIL           "E-mail for Let's Encrypt" "admin@${DOMAIN}"
+prompt_var OWNER_ADMIN_EMAIL    "Admin panel owner e-mail" "${ACME_EMAIL}"
+prompt_var OWNER_ADMIN_PASSWORD "Admin panel owner password"
+
+# ------------------------------------------------------------------- secrets
+gen_hex() { openssl rand -hex 32; }
+
+gen_fernet() {
+    # A Fernet key is url-safe base64 of 32 random bytes.
+    local key=""
+    if command -v python3 >/dev/null 2>&1; then
+        key="$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' 2>/dev/null || true)"
+    fi
+    if [[ -z "$key" ]]; then
+        # Fallback: openssl base64 translated to the url-safe alphabet.
+        key="$(openssl rand -base64 32 | tr '+/' '-_')"
+    fi
+    printf '%s' "$key"
+}
+
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(gen_hex)}"
+JWT_SECRET="${JWT_SECRET:-$(gen_hex)}"
+TELEGRAM_WEBHOOK_SECRET="${TELEGRAM_WEBHOOK_SECRET:-$(gen_hex)}"
+ENCRYPTION_KEY="${ENCRYPTION_KEY:-$(gen_fernet)}"
+log "secrets generated (postgres password, JWT secret, webhook secret, Fernet key)"
+
+# ---------------------------------------------------------------- write .env
+if [[ -f .env ]]; then
+    backup=".env.backup.$(date +%Y%m%d-%H%M%S)"
+    cp .env "$backup"
+    warn "existing .env backed up to $backup — values will be updated in place"
+else
+    [[ -f .env.example ]] || die ".env.example not found in $APP_DIR"
+    cp .env.example .env
+fi
+chmod 600 .env
+
+# Escape characters special on the sed replacement side (\, & and our
+# chosen delimiter |).
+sed_escape() { printf '%s' "$1" | sed -e 's/[\\|&]/\\&/g'; }
+
+# set_env KEY VALUE — update KEY in .env, appending it when absent.
+set_env() {
+    local key="$1" value="$2" esc
+    esc="$(sed_escape "$value")"
+    if grep -qE "^${key}=" .env; then
+        sed -i "s|^${key}=.*|${key}=${esc}|" .env
+    else
+        echo "${key}=${value}" >> .env
+    fi
+}
+
+# DATABASE_URL is built from parts; user/db come from .env defaults.
+POSTGRES_USER="$(grep -E '^POSTGRES_USER=' .env | head -n1 | cut -d= -f2- || true)"
+POSTGRES_USER="${POSTGRES_USER:-zed}"
+POSTGRES_DB="$(grep -E '^POSTGRES_DB=' .env | head -n1 | cut -d= -f2- || true)"
+POSTGRES_DB="${POSTGRES_DB:-zed_downloader}"
+DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+
+set_env DOMAIN                  "$DOMAIN"
+set_env ACME_EMAIL              "$ACME_EMAIL"
+set_env POSTGRES_USER           "$POSTGRES_USER"
+set_env POSTGRES_DB             "$POSTGRES_DB"
+set_env POSTGRES_PASSWORD       "$POSTGRES_PASSWORD"
+set_env DATABASE_URL            "$DATABASE_URL"
+set_env JWT_SECRET              "$JWT_SECRET"
+set_env ENCRYPTION_KEY          "$ENCRYPTION_KEY"
+set_env TELEGRAM_WEBHOOK_SECRET "$TELEGRAM_WEBHOOK_SECRET"
+set_env BOT_TOKEN               "$BOT_TOKEN"
+set_env BOT_USERNAME            "$BOT_USERNAME"
+set_env OWNER_ADMIN_EMAIL       "$OWNER_ADMIN_EMAIL"
+set_env OWNER_ADMIN_PASSWORD    "$OWNER_ADMIN_PASSWORD"
+set_env OWNER_TELEGRAM_ID       "$OWNER_TELEGRAM_ID"
+# NOTE: only used when RUN_MODE=webhook; harmless in the default polling mode.
+set_env WEBHOOK_BASE_URL        "https://${DOMAIN}"
+log ".env written"
+
+# ------------------------------------------------------------ CLI installer
+cp "$APP_DIR/scripts/manage.sh" /usr/local/bin/zed-downloader
+chmod +x /usr/local/bin/zed-downloader
+log "management CLI installed: zed-downloader (try: zed-downloader help)"
+
+# -------------------------------------------------------------- build + run
+# Same compose invocation manage.sh uses. NOTE: --env-file (not
+# --project-directory) so ${VAR} interpolation reads the root .env while
+# relative paths inside the compose file stay anchored to deploy/.
+COMPOSE=(docker compose -f "$APP_DIR/deploy/docker-compose.yml" --env-file "$APP_DIR/.env")
+
+log "building and starting the stack (first build can take several minutes)"
+"${COMPOSE[@]}" up -d --build
+
+# NOTE: the API port is not published on the host, so the health probe
+# runs inside the api container (curl http://localhost:8000/health).
+log "waiting for the API to become healthy (up to ~120s)"
+healthy=0
+for _ in $(seq 1 60); do
+    if "${COMPOSE[@]}" exec -T api curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
+        healthy=1
+        break
+    fi
+    sleep 2
+done
+
+if [[ "$healthy" -ne 1 ]]; then
+    err "API did not become healthy within 120s."
+    err "inspect with: zed-downloader logs api"
+    exit 1
+fi
+
+# ------------------------------------------------------------------ summary
+VERSION_STR="$(cat "$APP_DIR/VERSION" 2>/dev/null || echo unknown)"
+cat <<EOF
+
+${C_GREEN}==============================================================
+  zed-downloader v${VERSION_STR} installed successfully
+==============================================================${C_RESET}
+  Admin panel : https://${DOMAIN}
+  Admin login : ${OWNER_ADMIN_EMAIL}
+  Telegram bot: https://t.me/${BOT_USERNAME}
+  Install dir : ${APP_DIR}
+  CLI         : zed-downloader {status|logs|update|backup|doctor|...}
+
+  Webhook mode (optional, default is polling):
+    zed-downloader set-webhook   # then set RUN_MODE=webhook in .env
+${C_GREEN}==============================================================${C_RESET}
+EOF

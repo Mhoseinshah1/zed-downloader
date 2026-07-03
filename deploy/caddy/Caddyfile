@@ -1,0 +1,40 @@
+# ==========================================================================
+# zed-downloader — Caddy reverse proxy.
+#
+# NOTE: DOMAIN must have a public DNS A/AAAA record pointing at this
+# server BEFORE Caddy can obtain a Let's Encrypt certificate. Until
+# then (or when DOMAIN is unset and falls back to "localhost") Caddy
+# serves a locally-signed certificate instead.
+# ==========================================================================
+
+{
+	# ACME account e-mail for Let's Encrypt registration.
+	email {$ACME_EMAIL:admin@localhost}
+}
+
+{$DOMAIN:localhost} {
+	encode gzip
+
+	# Route order matters — most specific first, catch-all last.
+
+	# 1) Telegram webhook updates -> bot webhook server (port 8080).
+	handle /webhook/telegram* {
+		reverse_proxy bot:8080
+	}
+
+	# 2) Backend API, payment callbacks, health probe -> FastAPI (port 8000).
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+	handle /payments/* {
+		reverse_proxy api:8000
+	}
+	handle /health {
+		reverse_proxy api:8000
+	}
+
+	# 3) Everything else -> admin panel static files (nginx, port 80).
+	handle {
+		reverse_proxy admin:80
+	}
+}
