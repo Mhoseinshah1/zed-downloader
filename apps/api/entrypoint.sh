@@ -16,6 +16,7 @@ wait_for_db() {
     echo "[entrypoint] waiting for database..."
     python - <<'PY'
 import asyncio
+import re
 import sys
 
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -47,8 +48,21 @@ def sqlstate_of(exc):
     return None
 
 
+def redact_dsn(dsn: str) -> str:
+    """Mask the password in a DSN so it is safe to log (never log secrets)."""
+    return re.sub(r"(://[^:/@]+:)[^@]*(@)", r"\1***\2", dsn)
+
+
+def host_of(dsn: str) -> str:
+    m = re.search(r"@([^:/?]+)", dsn)
+    return m.group(1) if m else "?"
+
+
 async def wait() -> int:
-    engine = create_async_engine(get_settings().DATABASE_URL)
+    dsn = get_settings().DATABASE_URL
+    print(f"[entrypoint] target database: host={host_of(dsn)} dsn={redact_dsn(dsn)}")
+    engine = create_async_engine(dsn)
+    last_exc = None
     try:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
@@ -57,6 +71,7 @@ async def wait() -> int:
                 print("[entrypoint] database is ready")
                 return 0
             except Exception as exc:  # noqa: BLE001
+                last_exc = exc
                 code = sqlstate_of(exc)
                 if code in FATAL_SQLSTATES:
                     print("")
@@ -71,10 +86,11 @@ async def wait() -> int:
                     print("[entrypoint]   or: docker compose ... down -v && ... up -d --build")
                     print("=" * 72)
                     return 3
-                print(f"[entrypoint] db not ready (attempt {attempt}/{MAX_ATTEMPTS}: "
-                      f"{type(exc).__name__}); retrying in {RETRY_SLEEP}s")
+                print(f"[entrypoint] db not ready (attempt {attempt}/{MAX_ATTEMPTS}) "
+                      f"host={host_of(dsn)}: {type(exc).__name__}; retrying in {RETRY_SLEEP}s")
                 await asyncio.sleep(RETRY_SLEEP)
         print("[entrypoint] FATAL: database did not become reachable in time.")
+        print(f"[entrypoint] last connection error: {type(last_exc).__name__}: {last_exc}")
         return 1
     finally:
         await engine.dispose()

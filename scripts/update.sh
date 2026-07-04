@@ -94,6 +94,16 @@ else
     log "updating: v${PREV_VERSION} (${PREV_COMMIT:0:8}) -> v${NEW_VERSION} (${NEW_COMMIT:0:8})"
 fi
 
+# Keep APP_VERSION in .env in sync with the pulled VERSION so the image build
+# arg and /health report the new version. Update in place, or append if absent.
+if [[ -f "$ENV_FILE" ]]; then
+    if grep -q '^APP_VERSION=' "$ENV_FILE"; then
+        sed -i "s|^APP_VERSION=.*|APP_VERSION=${NEW_VERSION}|" "$ENV_FILE"
+    else
+        printf 'APP_VERSION=%s\n' "$NEW_VERSION" >> "$ENV_FILE"
+    fi
+fi
+
 log "step 3/4 — rebuilding and restarting the stack"
 "${COMPOSE[@]}" up -d --build
 

@@ -64,8 +64,22 @@ cmd_status() {
 }
 
 cmd_logs() {
-    # Usage: logs [service]
-    "${COMPOSE[@]}" logs -f --tail=200 "$@"
+    # Usage: logs [--follow|-f] [service]
+    # Default: print the last 200 lines and EXIT (never hangs). Pass --follow
+    # (or -f) to stream. This keeps `zed-downloader logs api` returnable.
+    local follow=0
+    local args=()
+    for a in "$@"; do
+        case "$a" in
+            -f|--follow) follow=1 ;;
+            *) args+=("$a") ;;
+        esac
+    done
+    if [[ "$follow" -eq 1 ]]; then
+        "${COMPOSE[@]}" logs -f --tail=200 "${args[@]}"
+    else
+        "${COMPOSE[@]}" logs --tail=200 "${args[@]}"
+    fi
 }
 
 cmd_start() {
@@ -206,7 +220,7 @@ Usage: zed-downloader <command> [args]
 
 Commands:
   status              Container list + API health
-  logs [service]      Follow logs (last 200 lines); service optional
+  logs [--follow] [svc]  Last 200 log lines and exit; --follow to stream
   start               Start the whole stack (docker compose up -d)
   stop                Stop all containers
   restart [service]   Restart everything, or one service

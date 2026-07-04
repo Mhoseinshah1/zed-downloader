@@ -73,8 +73,9 @@ async def health() -> dict:
 
 @app.get("/ready", tags=["misc"])
 async def ready() -> JSONResponse:
-    """Readiness. Checks the database is reachable. Returns 503 when not, so it
-    can gate real traffic without affecting the liveness/health signal."""
+    """Readiness. 200 only when BOTH the database and Redis are reachable;
+    503 otherwise. Gates real traffic without affecting the liveness signal
+    (/health stays dependency-free)."""
     database = "ok"
     try:
         async with engine.connect() as conn:
@@ -82,8 +83,23 @@ async def ready() -> JSONResponse:
     except Exception as exc:  # noqa: BLE001
         log.warning("readiness DB check failed: %s", exc)
         database = "error"
-    ok = database == "ok"
+
+    redis_status = "ok"
+    try:
+        from app.workers.queue import get_redis
+
+        await get_redis().ping()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("readiness Redis check failed: %s", exc)
+        redis_status = "error"
+
+    ok = database == "ok" and redis_status == "ok"
     return JSONResponse(
         status_code=200 if ok else 503,
-        content={"status": "ready" if ok else "not_ready", "database": database, "version": get_version()},
+        content={
+            "status": "ready" if ok else "not_ready",
+            "database": database,
+            "redis": redis_status,
+            "version": get_version(),
+        },
     )

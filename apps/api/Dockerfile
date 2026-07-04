@@ -1,8 +1,14 @@
 FROM python:3.12-slim
 
+# App version baked into the image (compose passes it from the root VERSION via
+# the APP_VERSION build arg). get_version() reads $APP_VERSION first, so the API
+# reports the real semver in-container without needing the VERSION file on disk.
+ARG APP_VERSION=1.0.0
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    APP_VERSION=${APP_VERSION}
 
 # ffmpeg: yt-dlp merges video+audio; curl: container healthcheck.
 RUN apt-get update \
