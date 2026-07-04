@@ -103,6 +103,8 @@ cmd_restart() {
 }
 
 cmd_update() {
+    # One-line updater: `zed-downloader update` — backup, pull, rebuild,
+    # health gate, auto-rollback of code + DB on failure. See docs/UPDATE.md.
     exec bash "$APP_DIR/scripts/update.sh"
 }
 
@@ -224,7 +226,7 @@ Commands:
   start               Start the whole stack (docker compose up -d)
   stop                Stop all containers
   restart [service]   Restart everything, or one service
-  update              Pull latest release, rebuild, auto-rollback on failure
+  update              Update to the latest version (backup, rebuild, health-check, auto-rollback)
   backup              Dump database + .env + VERSION into a tar.gz
   restore FILE        Restore a backup archive (destructive, asks to confirm)
   set-webhook         Register the Telegram webhook for RUN_MODE=webhook

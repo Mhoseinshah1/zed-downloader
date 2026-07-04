@@ -2,34 +2,76 @@
 
 ## `zed-downloader update`
 
-One command performs a safe, roll-back-able update:
+One command performs a safe, roll-back-able update, runnable **from any directory**:
 
 ```bash
 zed-downloader update
 ```
 
-Flow:
+Remote variant — works even on a box where you have not `cd`'d into the install
+dir yet (clones to `/opt/zed-downloader` first if the checkout is missing):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Mhoseinshah1/zed-downloader/main/scripts/remote-update.sh)
+```
+
+### Prerequisites
+
+- The app was installed by `scripts/install.sh`: a git checkout at
+  `/opt/zed-downloader` (override with `$ZED_DIR`) containing a `.env`.
+- Docker with the compose plugin on `PATH`.
+- No prompts: the update path is fully non-interactive (safe for cron/CI).
+
+### What happens, step by step
 
 ```
- 1. backup            pg_dump + .env snapshot (same as `zed-downloader backup`)
- 2. git pull          fetch the new code (current commit is remembered for rollback)
- 3. rebuild           docker compose build for changed images
- 4. restart           docker compose up -d
- 5. migrate           the api container's entrypoint runs Alembic migrations
-                      (and seeding) automatically on start — no manual step
- 6. health check      wait for GET /health to return ok
- 7a. success          a row is written to the `update_history` table
-                      (previous version → new version, status = success)
- 7b. failure          AUTO-ROLLBACK: git checkout of the previous commit,
-                      rebuild, restart, restore the pre-update DB backup;
-                      update_history records the failed attempt
+ 0. self-copy        update.sh re-executes itself from a temp copy under /tmp,
+                     so the `git reset` below can safely replace the on-disk
+                     script mid-run (the copy deletes itself when done)
+ 1. backup           scripts/backup.sh — pg_dump + .env snapshot. The update
+                     ABORTS if no archive is produced; this archive is what a
+                     rollback restores
+ 2. pull             git fetch origin --prune --tags &&
+                     git reset --hard origin/<current-branch>
+ 3. rebuild          docker compose ... up -d --build  (APP_VERSION in .env is
+                     synced to the new VERSION file first)
+ 4. migrate          the api container's entrypoint runs Alembic migrations
+                     (and idempotent seeding) automatically on start
+ 5. health gate      up to ~90s: GET /health inside zed_api must return 200,
+                     AND GET /ready must return 200 (database + Redis reachable).
+                     If /ready returns 404 (endpoint not present in that build),
+                     the gate falls back to /health alone
+ 6a. success         a row is written to update_history (status = success) and
+                     the last line printed is exactly:
+                        UPDATE OK: v<previous> -> v<new>
+ 6b. failure         AUTO-ROLLBACK: git reset --hard to the previous commit,
+                     then FORCE=1 scripts/restore.sh <step-1 archive> restores
+                     the database so it matches the rolled-back code (a forward
+                     migration is undone). update_history records rolled_back,
+                     and the last line printed is exactly:
+                        UPDATE FAILED — rolled back to v<previous>
 ```
 
 Notes:
 
-- Migrations run **on API start**, not as a separate command — step 4 is what triggers step 5.
-- The version shown in the panel and in `GET /api/admin/system/health` comes from the root [`VERSION`](../VERSION) file.
-- Because a backup is taken first, even a failed migration is recoverable: rollback restores the database dump taken in step 1.
+- **Backups live in `/opt/zed-downloader/backups/`** (timestamped `.tar.gz`; the
+  last 10 are kept). The pre-update archive from step 1 is a normal backup — you
+  can also restore it manually later.
+- Migrations run **on API start**, not as a separate command — step 3 is what triggers step 4.
+- The version shown by `/health` and the panel comes from the root [`VERSION`](../VERSION) file (exported as `APP_VERSION`).
+- Success is only claimed after the health gate passes — a broken update can never end with "UPDATE OK".
+
+### If it fails
+
+The updater rolls back automatically. To see why the new version failed:
+
+```bash
+zed-downloader logs api        # last 200 api log lines (add --follow to stream)
+zed-downloader status          # container states + health
+```
+
+The api log usually contains the exact error (import crash, failed migration,
+database auth). Fix the cause, push, and run `zed-downloader update` again.
 
 ## Manual update (equivalent steps)
 

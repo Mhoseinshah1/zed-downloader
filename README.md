@@ -60,6 +60,24 @@ sudo bash scripts/install.sh
 | `zed-downloader restore FILE` | بازگردانی از فایل پشتیبان |
 | `zed-downloader set-webhook` | ثبت وبهوک تلگرام (در حالت webhook) |
 
+## به‌روزرسانی (آپدیت)
+
+به‌روزرسانی به آخرین نسخه فقط یک دستور است و از هر مسیری قابل اجراست:
+
+```bash
+zed-downloader update
+```
+
+این دستور به‌ترتیب انجام می‌دهد: **پشتیبان‌گیری پیش از آپدیت ← دریافت آخرین کد ← بازسازی ایمیج‌ها ← بررسی سلامت سرویس ← و در صورت خطا، بازگشت خودکار کد و دیتابیس به نسخهٔ قبلی.** تا وقتی بررسی سلامت پاس نشود، آپدیت «موفق» اعلام نمی‌شود.
+
+اجرای از راه دور (حتی اگر هنوز وارد پوشهٔ نصب نشده‌اید):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Mhoseinshah1/zed-downloader/main/scripts/remote-update.sh)
+```
+
+راهنمای کامل: [docs/UPDATE.md](docs/UPDATE.md)
+
 ## نقشهٔ راه (نسخهٔ ۲)
 
 - درگاه‌های پرداخت زیبال، Telegram Stars، TON و TRON (USDT)
@@ -159,6 +177,24 @@ The installer asks for your domain, ACME e-mail, bot token/username, owner-admin
 | `zed-downloader backup` | Dump database + config into a timestamped archive (last 10 kept) |
 | `zed-downloader restore FILE` | Restore from a backup archive |
 | `zed-downloader set-webhook` | Register the Telegram webhook (webhook mode) |
+
+## Update
+
+Updating to the latest version is one command, runnable from any directory:
+
+```bash
+zed-downloader update
+```
+
+It performs, in order: **pre-update backup → pull latest code → rebuild images → health gate → automatic rollback of code AND database on failure.** The update is only declared successful after the health gate passes.
+
+Remote variant (works even before you `cd` into the install dir):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/Mhoseinshah1/zed-downloader/main/scripts/remote-update.sh)
+```
+
+Full guide: [docs/UPDATE.md](docs/UPDATE.md)
 
 ## Tech stack
 

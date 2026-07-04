@@ -376,6 +376,8 @@ ${C_GREEN}==============================================================
   Telegram bot: https://t.me/${BOT_USERNAME}
   Install dir : ${APP_DIR}
   CLI         : zed-downloader {status|logs|update|backup|doctor|...}
+  Update later: zed-downloader update
+                (backup -> pull -> rebuild -> health gate -> auto-rollback)
 
   Webhook mode (optional, default is polling):
     zed-downloader set-webhook   # then set RUN_MODE=webhook in .env
