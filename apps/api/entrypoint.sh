@@ -108,11 +108,13 @@ case "$ROLE" in
         echo "[entrypoint] FATAL: alembic migration failed — see the traceback above." >&2
         exit 4
     fi
+    echo "[entrypoint] migrations applied successfully."
     echo "[entrypoint] seeding (idempotent)..."
     if ! python -m app.seed; then
         echo "[entrypoint] FATAL: seeding failed — see the traceback above." >&2
         exit 5
     fi
+    echo "[entrypoint] seed completed successfully."
     echo "[entrypoint] starting uvicorn on 0.0.0.0:8000..."
     exec uvicorn app.main:app --host 0.0.0.0 --port 8000
     ;;

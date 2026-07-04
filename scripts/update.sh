@@ -9,6 +9,23 @@
 # ==========================================================================
 set -euo pipefail
 
+# --- self-update safety -----------------------------------------------------
+# `git reset --hard` below rewrites this very file on disk. Bash reads a script
+# lazily as it executes, so replacing it mid-run can corrupt execution. Guard:
+# on first entry, copy ourselves to /tmp and re-exec from there (flagged so we
+# do not loop). Every git/rebuild step then runs from the stable temp copy.
+if [[ "${ZED_UPDATE_REEXEC:-0}" != "1" ]]; then
+    _self="$0"
+    case "$_self" in /*) : ;; *) _self="$(pwd)/$_self" ;; esac
+    _copy="/tmp/zed-update.$$.sh"
+    cp "$_self" "$_copy" || { echo "[zed] ERROR: could not stage updater copy" >&2; exit 1; }
+    chmod +x "$_copy"
+    export ZED_UPDATE_REEXEC=1
+    exec bash "$_copy" "$@"
+fi
+# Running from the temp copy now — clean it up on exit ($$ is unchanged by exec).
+trap 'rm -f "/tmp/zed-update.$$.sh"' EXIT
+
 C_GREEN=$'\033[1;32m'
 C_YELLOW=$'\033[1;33m'
 C_RED=$'\033[1;31m'
@@ -38,12 +55,37 @@ api_health() {
     "${COMPOSE[@]}" exec -T api curl -fsS http://localhost:8000/health >/dev/null 2>&1
 }
 
-# wait_healthy MAX_TRIES (2s apart)
+# /ready may not exist on older deployments. Echo: ok | notready | missing.
+api_ready_state() {
+    local code
+    code="$("${COMPOSE[@]}" exec -T api curl -s -o /dev/null -w '%{http_code}' \
+        http://localhost:8000/ready 2>/dev/null || true)"
+    case "$code" in
+        200) echo ok ;;
+        404) echo missing ;;
+        *)   echo notready ;;
+    esac
+}
+
+# Which gate actually passed (for logs/report). Set by wait_healthy.
+READY_GATE="/health"
+
+# wait_healthy MAX_TRIES (2s apart). Succeeds only when /health passes AND
+# /ready passes too — unless /ready is absent (older build), then /health alone.
 wait_healthy() {
-    local tries="$1" i
+    local tries="$1" i state
     for i in $(seq 1 "$tries"); do
         if api_health; then
-            return 0
+            state="$(api_ready_state)"
+            if [[ "$state" == "ok" ]]; then
+                READY_GATE="/health+/ready"
+                return 0
+            fi
+            if [[ "$state" == "missing" ]]; then
+                READY_GATE="/health (/ready not present)"
+                return 0
+            fi
+            # state == notready: DB/Redis still warming — keep polling.
         fi
         sleep 2
     done
@@ -109,8 +151,9 @@ log "step 3/4 — rebuilding and restarting the stack"
 
 log "step 4/4 — waiting for the API to become healthy (up to ~90s)"
 if wait_healthy 45; then
-    log "update successful: v${NEW_VERSION}"
+    log "health gate passed: ${READY_GATE}"
     record_update "$PREV_VERSION" "$NEW_VERSION" "success" "cli update"
+    echo "UPDATE OK: v${PREV_VERSION} -> v${NEW_VERSION}"
     exit 0
 fi
 
@@ -130,4 +173,5 @@ else
 fi
 
 record_update "$PREV_VERSION" "$NEW_VERSION" "rolled_back" "cli update failed health check"
+echo "UPDATE FAILED — rolled back to v${PREV_VERSION}"
 exit 1

@@ -35,6 +35,18 @@ async def test_health_is_db_independent():
     assert body["version"]
 
 
+async def test_health_ok_even_when_db_down(monkeypatch):
+    """/health stays 200 (ok) even when the database is unreachable — it is
+    liveness, not readiness."""
+    class _BrokenEngine:
+        def connect(self):
+            raise RuntimeError("db down")
+
+    monkeypatch.setattr(main, "engine", _BrokenEngine())
+    body = await main.health()
+    assert body["status"] == "ok"
+
+
 async def test_ready_ok_when_db_and_redis_up(session):
     resp = await main.ready()
     assert resp.status_code == 200
