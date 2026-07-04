@@ -28,11 +28,15 @@ async def check_and_increment(scope: str, identity: int | str) -> bool:
     limit = settings.RATE_LIMIT_MAX_REQUESTS
     try:
         r = get_redis()
-        # INCR then set the expiry only when the key is first created, so the
-        # window is anchored to the first request in it.
+        # Create the window key WITH its TTL atomically on first use (SET NX EX),
+        # so the counter can never be left without an expiry. (A plain INCR
+        # then a separate EXPIRE is non-atomic: if EXPIRE fails after INCR the
+        # key persists forever and the identity is permanently locked out.)
+        # Later hits in the window just INCR the already-expiring key.
+        created = await r.set(key, 1, nx=True, ex=window)
+        if created:
+            return 1 <= limit
         count = await r.incr(key)
-        if count == 1:
-            await r.expire(key, window)
         return count <= limit
     except Exception as exc:  # Redis down — fail open.
         log.warning("rate limiter unavailable (%s); allowing request", exc)

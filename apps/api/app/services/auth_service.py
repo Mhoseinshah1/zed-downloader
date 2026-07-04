@@ -32,19 +32,24 @@ async def revoke_token(session: AsyncSession, payload: dict) -> None:
     exists = await session.execute(select(RevokedToken.id).where(RevokedToken.jti == jti))
     if exists.scalar_one_or_none() is not None:
         return
-    session.add(
-        RevokedToken(
-            jti=jti,
-            admin_id=int(payload["sub"]) if payload.get("sub") else None,
-            token_type=payload.get("type", "access"),
-            expires_at=_exp_datetime(payload),
-        )
-    )
     try:
-        await session.flush()
+        # SAVEPOINT: a concurrent duplicate-jti insert must roll back ONLY this
+        # insert, never earlier work in the same request transaction. (logout
+        # revokes two tokens on one session; a plain session.rollback() here
+        # would also discard the first, already-flushed revocation.) The add
+        # is inside the nested block so the savepoint rollback fully discards it.
+        async with session.begin_nested():
+            session.add(
+                RevokedToken(
+                    jti=jti,
+                    admin_id=int(payload["sub"]) if payload.get("sub") else None,
+                    token_type=payload.get("type", "access"),
+                    expires_at=_exp_datetime(payload),
+                )
+            )
     except IntegrityError:
         # Concurrent revoke of the same jti — already blacklisted, fine.
-        await session.rollback()
+        pass
 
 
 async def is_token_revoked(session: AsyncSession, payload: dict) -> bool:

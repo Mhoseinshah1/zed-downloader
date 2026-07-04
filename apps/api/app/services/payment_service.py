@@ -87,6 +87,13 @@ async def activate_subscription(session: AsyncSession, payment: Payment) -> Subs
     # transaction back and leaves the payment pending for manual refund —
     # never a silently mis-credited or orphaned subscription.
     if plan.scope == "user":
+        if payment.group_id is not None:
+            # A group was recorded but the plan is now user-scope (scope flipped
+            # group->user mid-payment). Block rather than silently credit the
+            # payer with a personal subscription — symmetric with the group case.
+            raise PaymentGatewayError(
+                f"payment {payment.id} records a group but plan {plan.id} is user-scope"
+            )
         sub_user_id: int | None = payment.user_id
         sub_group_id: int | None = None
     elif plan.scope == "group":
