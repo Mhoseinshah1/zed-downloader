@@ -189,11 +189,16 @@ preserve_secret POSTGRES_PASSWORD
 preserve_secret JWT_SECRET
 preserve_secret TELEGRAM_WEBHOOK_SECRET
 preserve_secret ENCRYPTION_KEY
+# REDIS_PASSWORD guards the running redis (--requirepass) and is embedded in
+# REDIS_URL; a re-run must keep the existing value so the live redis auth and
+# the encrypted state that depends on it stay in sync.
+preserve_secret REDIS_PASSWORD
 
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(gen_hex)}"
 JWT_SECRET="${JWT_SECRET:-$(gen_hex)}"
 TELEGRAM_WEBHOOK_SECRET="${TELEGRAM_WEBHOOK_SECRET:-$(gen_hex)}"
 ENCRYPTION_KEY="${ENCRYPTION_KEY:-$(gen_fernet)}"
+REDIS_PASSWORD="${REDIS_PASSWORD:-$(openssl rand -hex 24)}"
 log "secrets ready (env-provided or preserved values kept, missing ones generated)"
 
 # ---------------------------------------------------------------- write .env
@@ -230,12 +235,19 @@ POSTGRES_DB="$(grep -E '^POSTGRES_DB=' .env | head -n1 | cut -d= -f2- || true)"
 POSTGRES_DB="${POSTGRES_DB:-zed_downloader}"
 DATABASE_URL="postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
 
+# REDIS_URL embeds the (possibly preserved) REDIS_PASSWORD so api/worker/bot
+# authenticate against the password-protected redis. Empty-user form
+# redis://:PASSWORD@host is what redis expects for a requirepass-only server.
+REDIS_URL="redis://:${REDIS_PASSWORD}@redis:6379/0"
+
 set_env DOMAIN                  "$DOMAIN"
 set_env ACME_EMAIL              "$ACME_EMAIL"
 set_env POSTGRES_USER           "$POSTGRES_USER"
 set_env POSTGRES_DB             "$POSTGRES_DB"
 set_env POSTGRES_PASSWORD       "$POSTGRES_PASSWORD"
 set_env DATABASE_URL            "$DATABASE_URL"
+set_env REDIS_PASSWORD          "$REDIS_PASSWORD"
+set_env REDIS_URL               "$REDIS_URL"
 set_env JWT_SECRET              "$JWT_SECRET"
 set_env ENCRYPTION_KEY          "$ENCRYPTION_KEY"
 set_env TELEGRAM_WEBHOOK_SECRET "$TELEGRAM_WEBHOOK_SECRET"
@@ -246,6 +258,12 @@ set_env OWNER_ADMIN_PASSWORD    "$OWNER_ADMIN_PASSWORD"
 set_env OWNER_TELEGRAM_ID       "$OWNER_TELEGRAM_ID"
 # NOTE: only used when RUN_MODE=webhook; harmless in the default polling mode.
 set_env WEBHOOK_BASE_URL        "https://${DOMAIN}"
+# Production defaults: the admin panel is served same-origin behind Caddy, so
+# CORS must stay EMPTY (same-origin only). Forced here so a re-run over an
+# older .env that lacked these — or had them loosened — lands on the secure
+# values.
+set_env ENV                     "production"
+set_env CORS_ORIGINS            ""
 log ".env written"
 
 # ------------------------------------------------------------ CLI installer
