@@ -61,6 +61,43 @@ Notes:
 - Zarinpal verify code `100` = verified now, `101` = already verified — both count as success with the same `ref_id`.
 - The callback base URL is `PAYMENT_CALLBACK_BASE_URL` (defaults to `https://$DOMAIN`).
 
+## Group subscription purchase
+
+Plans have a **`scope`**: `user` plans bind the resulting subscription to the buyer, while `group` plans bind it to a **Telegram group** so all its members draw from one shared quota.
+
+A group plan **must be bought from inside the target group** — that is how the API learns which group the subscription is for:
+
+```
+ admin in the group taps "Buy for this group"
+        │
+        ▼
+ bot ── GET /api/internal/plans?scope=group ──▶ api      lists the group-buyable plans
+        │
+        ▼
+ bot ── POST /api/internal/payments/create ──▶ api
+        {telegram_id, plan_id, gateway, chat_id}         chat_id = the group's (negative)
+        │                                                Telegram chat id
+        ▼
+ api validates: plan.scope == "group" AND chat_id is a group id (< 0),
+     upserts the Group, and creates the pending Payment carrying group_id
+        │
+        ▼
+ (from here the Zarinpal flow above is identical: StartPay → callback → verify)
+        │
+        ▼
+ activate_subscription binds the subscription to the GROUP, not the buyer;
+ members share its download quota
+```
+
+Rules the API enforces:
+
+- `POST /api/internal/payments/create` takes an optional `chat_id`. For a **group** plan it is **required** and must be a group chat id (negative); omit it and the call is rejected `400`.
+- For a **user** plan, `chat_id` must be omitted/null.
+- The `payments.group_id` column records which group a group-scope payment (and its subscription) belongs to.
+- Quota accounting still runs through `subscription_service` only — a group subscription is just a subscription whose owner is a group, so **all the money-safety invariants above apply unchanged**. Nothing about group buys creates a second activation path.
+
+`scope` is set per plan from the panel Plans page; see [ADMIN.md](ADMIN.md) and the endpoints in [API.md](API.md#internal-router-bot--api).
+
 ## Sandbox toggle
 
 ```bash
@@ -90,4 +127,4 @@ Do **not** create subscriptions, mark payments successful, or touch quotas anywh
 
 Planned gateways: **Zibal**, **Telegram Stars**, **TON**, **TRON (USDT)** — each is one class + one registry line + one callback route, per the steps above.
 
-See also: [API.md](API.md) for payment endpoints · [ADMIN.md](ADMIN.md) for plans/payments pages.
+See also: [API.md](API.md) for payment endpoints · [ADMIN.md](ADMIN.md) for plans/payments pages · [OPERATIONS.md](OPERATIONS.md) for runtime hardening.

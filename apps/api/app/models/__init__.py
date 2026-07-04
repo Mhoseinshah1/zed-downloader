@@ -1,7 +1,7 @@
 """Re-export every model so `from app import models` registers all tables
 on Base.metadata (Alembic autogenerate relies on this)."""
 from app.database import Base
-from app.models.accounts import Admin, Group, User
+from app.models.accounts import Admin, Group, RevokedToken, User
 from app.models.billing import Payment, Plan, Subscription
 from app.models.catalog import (
     Ad,
@@ -18,6 +18,7 @@ __all__ = [
     "Base",
     "Admin",
     "Group",
+    "RevokedToken",
     "User",
     "Payment",
     "Plan",

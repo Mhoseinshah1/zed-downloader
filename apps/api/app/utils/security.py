@@ -4,6 +4,7 @@ Auth paths favour explicitness over cleverness — every function here is
 short and does exactly one thing.
 """
 import datetime as dt
+import uuid
 
 import bcrypt
 import jwt
@@ -32,7 +33,15 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def _create_token(subject: int | str, token_type: str, ttl: dt.timedelta, extra: dict | None = None) -> str:
     now = dt.datetime.now(dt.timezone.utc)
-    payload: dict = {"sub": str(subject), "type": token_type, "iat": now, "exp": now + ttl}
+    payload: dict = {
+        "sub": str(subject),
+        "type": token_type,
+        "iat": now,
+        "exp": now + ttl,
+        # Unique token id so individual tokens can be revoked (see logout /
+        # RevokedToken). Present on both access and refresh tokens.
+        "jti": uuid.uuid4().hex,
+    }
     if extra:
         payload.update(extra)
     return jwt.encode(payload, get_settings().JWT_SECRET, algorithm=JWT_ALGORITHM)

@@ -1,13 +1,15 @@
 """Admin-panel authentication: login / refresh / logout / me."""
 import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db, utcnow
 from app.models import Admin
 from app.routes.deps import get_current_admin
-from app.schemas.auth import AdminOut, LoginIn, RefreshIn, TokenPairOut
+from app.schemas.auth import AdminOut, LoginIn, LogoutIn, RefreshIn, TokenPairOut
+from app.services.auth_service import is_token_revoked, revoke_token
 from app.utils.security import (
     create_access_token,
     create_refresh_token,
@@ -16,6 +18,7 @@ from app.utils.security import (
 )
 
 router = APIRouter(prefix="/api/admin", tags=["auth"])
+_bearer = HTTPBearer(auto_error=False)
 
 
 @router.post("/auth/login", response_model=TokenPairOut)
@@ -42,6 +45,8 @@ async def refresh(body: RefreshIn, db: AsyncSession = Depends(get_db)) -> TokenP
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or expired refresh token")
     if payload.get("type") != "refresh":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "refresh token required")
+    if await is_token_revoked(db, payload):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "refresh token has been revoked")
     admin = await db.get(Admin, int(payload.get("sub", 0)))
     if admin is None or not admin.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "admin not found or disabled")
@@ -53,9 +58,28 @@ async def refresh(body: RefreshIn, db: AsyncSession = Depends(get_db)) -> TokenP
 
 
 @router.post("/auth/logout")
-async def logout(admin: Admin = Depends(get_current_admin)) -> dict:
-    # Stateless JWTs: the client discards its tokens. NOTE: a server-side
-    # refresh-token blacklist is a v2 hardening item.
+async def logout(
+    body: LogoutIn | None = None,
+    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    admin: Admin = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Revoke the presented access token and, when supplied, the refresh
+    token — so a logged-out session's tokens stop working immediately even
+    though JWTs are otherwise stateless."""
+    if creds is not None:
+        try:
+            await revoke_token(db, decode_token(creds.credentials))
+        except pyjwt.PyJWTError:
+            pass  # already invalid — nothing to revoke
+    if body is not None and body.refresh_token:
+        try:
+            payload = decode_token(body.refresh_token)
+            if payload.get("type") == "refresh" and str(payload.get("sub")) == str(admin.id):
+                await revoke_token(db, payload)
+        except pyjwt.PyJWTError:
+            pass
+    await db.commit()
     return {"ok": True}
 
 

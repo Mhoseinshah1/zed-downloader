@@ -16,6 +16,8 @@
   --success-soft: rgba(47, 191, 113, 0.14);
   --danger: #e5484d;
   --danger-soft: rgba(229, 72, 77, 0.14);
+  --warn: #e8a33d;
+  --warn-soft: rgba(232, 163, 61, 0.16);
   --radius: 10px;
   --font: Tahoma, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
 }
@@ -63,7 +65,11 @@ button {
 
 input[type="text"],
 input[type="email"],
-input[type="password"] {
+input[type="password"],
+input[type="number"],
+input[type="url"],
+select,
+textarea {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -74,12 +80,22 @@ input[type="password"] {
   transition: border-color 0.15s ease;
 }
 
-input:focus {
+input:focus,
+select:focus,
+textarea:focus {
   border-color: var(--accent);
 }
 
-input::placeholder {
+input::placeholder,
+textarea::placeholder {
   color: var(--text-muted);
+}
+
+textarea {
+  font-family: inherit;
+  line-height: 1.5;
+  min-height: 90px;
+  resize: vertical;
 }
 
 /* Buttons */
@@ -163,6 +179,16 @@ input::placeholder {
 .badge--danger {
   background: var(--danger-soft);
   color: var(--danger);
+}
+
+.badge--warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.badge--neutral {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
 }
 
 /* Inline notes (loading / error rows) */

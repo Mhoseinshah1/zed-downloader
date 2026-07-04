@@ -34,6 +34,26 @@ def available_languages() -> list[str]:
     return sorted(_translations, key=lambda code: (code != PRIMARY_LANGUAGE, code))
 
 
+def apply_overlay(texts_by_lang: dict[str, dict[str, str]] | None) -> None:
+    """Overlay panel-edited texts on top of the bundled JSON, per lang + key.
+
+    ``texts_by_lang`` maps a language code to a ``{key: value}`` mapping (the
+    shape returned by ``GET /api/internal/texts``). Each string value replaces
+    the bundled default for that lang + key so ``t()`` returns the DB value when
+    present and the JSON default otherwise. Only languages that are already
+    bundled are overlaid, and malformed entries are skipped so a bad payload can
+    never wipe or corrupt the shipped translations.
+    """
+    if not texts_by_lang:
+        return
+    for lang, entries in texts_by_lang.items():
+        if lang not in _translations or not isinstance(entries, dict):
+            continue
+        for key, value in entries.items():
+            if isinstance(value, str):
+                _translations[lang][key] = value
+
+
 def t(lang: str | None, key: str, **kwargs: object) -> str:
     """Translate ``key`` for ``lang`` with fallback chain lang -> en -> key.
 

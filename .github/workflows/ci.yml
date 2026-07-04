@@ -1,0 +1,81 @@
+# CI workflow for zed-downloader.
+# Runs independent per-component checks (api, bot, admin, scripts, compose) on
+# every push and pull request to main, master, and claude/** branches.
+# No external DB/redis services are needed: API tests use sqlite + fakeredis.
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - 'claude/**'
+  pull_request:
+    branches:
+      - main
+      - master
+      - 'claude/**'
+
+jobs:
+  api:
+    name: API (Python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r apps/api/requirements.txt
+          if [ -f apps/api/requirements-dev.txt ]; then
+            pip install -r apps/api/requirements-dev.txt
+          else
+            pip install pytest pytest-asyncio fakeredis aiosqlite httpx
+          fi
+      - name: Compile check
+        run: python -m py_compile $(find apps/api/app -name '*.py')
+      - name: Run tests
+        run: cd apps/api && python -m pytest -q
+
+  bot:
+    name: Bot (Python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile check
+        run: cd apps/bot && python -m py_compile $(find bot -name '*.py')
+
+  admin:
+    name: Admin (Node 20)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: apps/admin/package-lock.json
+      - name: Install and build
+        run: cd apps/admin && (npm ci || npm install) && npm run build
+
+  scripts:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check
+        run: bash -n scripts/*.sh
+
+  compose:
+    name: Docker Compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose file
+        run: docker compose -f deploy/docker-compose.yml --env-file .env.example config

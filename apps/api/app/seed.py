@@ -76,54 +76,11 @@ SETTINGS_DEFAULTS: list[tuple[str, str, str]] = [
     ("forced_join_enabled", "true", "true = bot enforces joining forced_join_channels"),
 ]
 
-# Panel-editable copies of user-facing texts (v2 seam: worker/bot currently
-# ship their own defaults in code; the panel edits these rows).
-BOT_TEXTS: dict[str, dict[str, str]] = {
-    "welcome": {
-        "fa": "سلام! لینک عمومی از اینستاگرام، یوتیوب، تیک‌تاک یا توییتر بفرست تا برات دانلود کنم.",
-        "en": "Hi! Send a public link from Instagram, YouTube, TikTok or Twitter and I'll download it for you.",
-    },
-    "help": {
-        "fa": "کافی است یک لینک عمومی بفرستید. فقط محتوای عمومی پشتیبانی می‌شود.",
-        "en": "Just send a public link. Only public content is supported.",
-    },
-    "download.queued": {
-        "fa": "درخواست شما در صف قرار گرفت؛ فایل به‌زودی ارسال می‌شود.",
-        "en": "Your request is queued; the file will arrive shortly.",
-    },
-    "error.unsupported_url": {
-        "fa": "این لینک پشتیبانی نمی‌شود.",
-        "en": "This link is not supported.",
-    },
-    "error.private_content": {
-        "fa": "این محتوا خصوصی است و قابل دانلود نیست.",
-        "en": "This content is private and cannot be downloaded.",
-    },
-    "error.not_found": {
-        "fa": "محتوایی در این لینک پیدا نشد.",
-        "en": "No content was found at this link.",
-    },
-    "error.provider_down": {
-        "fa": "سرویس دانلود موقتاً در دسترس نیست.",
-        "en": "The download service is temporarily unavailable.",
-    },
-    "error.rate_limited": {
-        "fa": "درخواست‌ها زیاد است؛ کمی بعد تلاش کنید.",
-        "en": "Too many requests; try again soon.",
-    },
-    "error.file_too_large": {
-        "fa": "حجم فایل بیشتر از حد مجاز است.",
-        "en": "The file exceeds the allowed size.",
-    },
-    "error.duration_too_long": {
-        "fa": "مدت‌زمان ویدیو بیشتر از حد مجاز است.",
-        "en": "The video exceeds the allowed duration.",
-    },
-    "error.unknown_error": {
-        "fa": "خطای غیرمنتظره‌ای رخ داد.",
-        "en": "An unexpected error occurred.",
-    },
-}
+# Panel-editable copies of user-facing texts. The worker and bot resolve texts
+# through texts_service, which falls back to these exact defaults when a row is
+# missing — seeding DEFAULTS keeps the DB and code in lockstep while still
+# letting operators edit the rows from the panel.
+from app.services.texts_service import DEFAULTS as BOT_TEXTS  # noqa: E402
 
 
 async def seed() -> None:

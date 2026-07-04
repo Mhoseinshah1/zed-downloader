@@ -52,6 +52,9 @@ class Payment(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
     plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id"), nullable=False)
+    # Set for group-scope purchases: the group the resulting subscription
+    # activates for. NULL for personal (user-scope) plans.
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id"), index=True)
     gateway: Mapped[str] = mapped_column(String(32), nullable=False)  # key into GATEWAYS
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(8), default="IRT", nullable=False)

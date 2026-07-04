@@ -32,6 +32,7 @@ _KNOWN_DENIED_REASONS = {
     "limit_reached",
     "need_subscription",
     "group_disabled",
+    "rate_limited",
 }
 
 # telegram_chat_id -> monotonic expiry; avoids re-upserting a group on every URL
@@ -94,7 +95,9 @@ async def _process_download(
         )
         reply_markup = None
         if reason == "need_subscription":
-            plans = result.get("plans") or await api_client.get_plans() or []
+            # Group chats (chat_id set) need group-scope plans; private user-scope.
+            scope = "group" if chat_id is not None else "user"
+            plans = result.get("plans") or await api_client.get_plans(scope=scope) or []
             if plans:
                 reply_markup = plans_keyboard(plans, lang)
         await message.reply(t(lang, key), reply_markup=reply_markup)

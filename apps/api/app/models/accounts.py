@@ -1,7 +1,7 @@
 """Telegram users, Telegram groups, and panel admins."""
 import datetime as dt
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Integer, String
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base, TimestampMixin
@@ -46,3 +46,21 @@ class Admin(TimestampMixin, Base):
     role: Mapped[str] = mapped_column(String(32), default="support", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_login_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RevokedToken(Base):
+    """Blacklist of admin JWT ids (jti) invalidated before their natural
+    expiry — e.g. on logout. Checked on every authenticated request and on
+    refresh. Rows are purged once past expires_at (housekeeping)."""
+
+    __tablename__ = "revoked_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    jti: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    admin_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    token_type: Mapped[str] = mapped_column(String(16), nullable=False)  # access | refresh
+    # When the underlying token would have expired anyway (safe to purge after).
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    revoked_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

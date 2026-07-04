@@ -1,12 +1,11 @@
-"""Download worker: BLPOP the Redis queue -> download via ProviderManager
-(with provider fallback) -> upload to the Telegram chat -> consume quota
-AFTER the upload succeeded -> bookkeeping on download_requests.
+"""Download worker: consume the Redis-Streams queue -> download via
+ProviderManager (with provider fallback) -> upload to the Telegram chat ->
+consume quota AFTER the upload succeeded -> bookkeeping on download_requests.
 
 Also runs periodic housekeeping:
-- sweeps download requests orphaned by a crash/restart (BLPOP is
-  at-most-once; NOTE: v2 = ack-based queue via BLMOVE),
-- re-verifies pending payments whose gateway callback never completed, so
-  charged users get their subscription without reopening the callback URL.
+- fails download requests dead-lettered by the queue so their quota releases,
+- re-verifies pending payments whose gateway callback never completed,
+- refreshes the panel-editable text cache and purges expired revoked tokens.
 
 Run with: python -m app.workers.runner
 """
@@ -21,12 +20,15 @@ from sqlalchemy import and_, or_, select
 
 from app.config import get_settings
 from app.database import SessionLocal, utcnow
-from app.models import DownloadRequest, Payment, User
+from app.models import Ad, DownloadRequest, Payment, User
 from app.providers.base import DownloadError, DownloadResult, ProviderException
 from app.providers.manager import manager
+from app.services import texts_service
+from app.services.ads_service import get_random_ad
+from app.services.auth_service import purge_expired
 from app.services.payment_service import verify_and_activate
 from app.services.subscription_service import consume_download
-from app.workers.queue import dequeue
+from app.workers.queue import ack_and_remove, ensure_group, read_new, reclaim_stale
 
 log = logging.getLogger("zed.worker")
 
@@ -37,42 +39,11 @@ HOUSEKEEPING_INTERVAL_SECONDS = 300
 RECONCILE_MIN_AGE = dt.timedelta(minutes=30)
 RECONCILE_MAX_AGE = dt.timedelta(hours=24)
 
-# Per-error user-facing messages. fa is the primary market language; en is
-# the fallback. NOTE: panel-managed bot_texts overrides are a v2 seam.
-ERROR_TEXT: dict[str, dict[str, str]] = {
-    "fa": {
-        "unsupported_url": "این لینک پشتیبانی نمی‌شود. لطفاً یک لینک عمومی از پلتفرم‌های پشتیبانی‌شده بفرستید.",
-        "private_content": "این محتوا خصوصی است و قابل دانلود نیست. فقط محتوای عمومی پشتیبانی می‌شود.",
-        "not_found": "محتوایی در این لینک پیدا نشد؛ ممکن است حذف شده باشد.",
-        "provider_down": "سرویس دانلود موقتاً در دسترس نیست. لطفاً کمی بعد دوباره تلاش کنید.",
-        "rate_limited": "تعداد درخواست‌ها زیاد است؛ لطفاً چند دقیقه دیگر دوباره تلاش کنید.",
-        "file_too_large": "حجم این فایل بیشتر از حد مجاز است و قابل ارسال نیست.",
-        "duration_too_long": "مدت‌زمان این ویدیو بیشتر از حد مجاز است.",
-        "unknown_error": "خطای غیرمنتظره‌ای رخ داد. لطفاً دوباره تلاش کنید.",
-        "upload_failed": "دانلود انجام شد اما ارسال فایل به تلگرام ناموفق بود. لطفاً دوباره تلاش کنید.",
-    },
-    "en": {
-        "unsupported_url": "This link is not supported. Please send a public link from a supported platform.",
-        "private_content": "This content is private and cannot be downloaded. Only public content is supported.",
-        "not_found": "No content was found at this link; it may have been removed.",
-        "provider_down": "The download service is temporarily unavailable. Please try again later.",
-        "rate_limited": "Too many requests right now; please try again in a few minutes.",
-        "file_too_large": "This file is larger than the allowed size and cannot be sent.",
-        "duration_too_long": "This video is longer than the allowed duration.",
-        "unknown_error": "An unexpected error occurred. Please try again.",
-        "upload_failed": "The download finished but sending the file to Telegram failed. Please try again.",
-    },
-}
-
-PAYMENT_CONFIRMED_TEXT = {
-    "fa": "✅ پرداخت شما تأیید شد و اشتراک‌تان فعال است.",
-    "en": "✅ Your payment was verified and your subscription is now active.",
-}
-
 
 def error_text(lang: str, code: str) -> str:
-    table = ERROR_TEXT.get(lang) or ERROR_TEXT["en"]
-    return table.get(code) or ERROR_TEXT["en"].get(code) or ERROR_TEXT["en"]["unknown_error"]
+    """User-facing message for a DownloadError, via the panel-editable text
+    cache (falls back to shipped defaults)."""
+    return texts_service.text(lang, f"error.{code}")
 
 
 async def _send_text(bot, chat_id: int, text: str) -> None:
@@ -80,6 +51,33 @@ async def _send_text(bot, chat_id: int, text: str) -> None:
         await bot.send_message(chat_id, text)
     except Exception as exc:  # user blocked the bot, chat gone, etc.
         log.warning("could not message chat %s: %s", chat_id, exc)
+
+
+async def _send_ad(bot, chat_id: int) -> None:
+    """Deliver one random weighted active ad. Best-effort — an ad failure must
+    never affect the download the user actually asked for."""
+    settings = get_settings()
+    if not settings.ADS_ENABLED:
+        return
+    try:
+        async with SessionLocal() as session:
+            ad = await get_random_ad(session)
+        if ad is None:
+            return
+        if ad.media_url:
+            await bot.send_photo(chat_id, ad.media_url, caption=ad.content)
+        else:
+            await bot.send_message(chat_id, ad.content)
+    except Exception as exc:
+        log.warning("could not send ad to chat %s: %s", chat_id, exc)
+
+
+def _ad_before() -> bool:
+    return get_settings().ADS_PLACEMENT in ("before", "both")
+
+
+def _ad_after() -> bool:
+    return get_settings().ADS_PLACEMENT in ("after", "both")
 
 
 async def _upload(bot, chat_id: int, result: DownloadResult) -> str | None:
@@ -152,8 +150,14 @@ async def process_job(bot, payload: dict) -> None:
 
     async with SessionLocal() as session:
         request = await session.get(DownloadRequest, request_id)
-        if request is None or request.status != "queued":
-            log.info("skipping job %s (missing or not queued)", request_id)
+        if request is None:
+            log.info("skipping job %s (row missing)", request_id)
+            return
+        # "queued" = fresh; "processing" = reclaimed after a worker crash.
+        # Terminal states (completed/failed/denied) are duplicate deliveries —
+        # skip so we never re-send a file the user already received.
+        if request.status not in ("queued", "processing"):
+            log.info("skipping job %s (status=%s, already handled)", request_id, request.status)
             return
 
         request.status = "processing"
@@ -190,6 +194,9 @@ async def process_job(bot, payload: dict) -> None:
                 await _send_text(bot, chat_id, error_text(lang, exc.code.value))
                 return
 
+            if _ad_before():
+                await _send_ad(bot, chat_id)
+
             try:
                 telegram_file_id = await _upload(bot, chat_id, result)
             except Exception as exc:
@@ -219,6 +226,8 @@ async def process_job(bot, payload: dict) -> None:
             request.completed_at = utcnow()
             await session.commit()
             log.info("request %s completed via provider %s", request.id, provider_row.slug)
+            if _ad_after():
+                await _send_ad(bot, chat_id)
         except Exception:
             # Anything unexpected (DB hiccup, provider bug) must not leave the
             # row stuck in "processing" — a stuck row silently occupies quota.
@@ -299,15 +308,32 @@ async def reconcile_pending_payments(bot) -> None:
             log.info("reconciled payment %s (ref %s)", payment_id, outcome.ref_id)
             user = await session.get(User, user_id)
         if user is not None:
-            text = PAYMENT_CONFIRMED_TEXT.get(user.language) or PAYMENT_CONFIRMED_TEXT["en"]
-            await _send_text(bot, user.telegram_id, text)
+            await _send_text(bot, user.telegram_id, texts_service.text(user.language, "payment.confirmed"))
+
+
+async def purge_revoked_tokens() -> None:
+    """Delete admin-token blacklist rows whose tokens have expired anyway."""
+    async with SessionLocal() as session:
+        removed = await purge_expired(session)
+        if removed:
+            await session.commit()
+            log.info("purged %d expired revoked-token row(s)", removed)
+
+
+async def refresh_texts() -> None:
+    async with SessionLocal() as session:
+        await texts_service.refresh(session)
 
 
 async def housekeeping_loop(bot) -> None:
     while True:
         try:
+            # Fail rows dead-lettered by the queue (their stream entry is gone
+            # but the row is still "processing") so quota is released.
             await sweep_stale_requests()
             await reconcile_pending_payments(bot)
+            await purge_revoked_tokens()
+            await refresh_texts()
         except Exception:
             log.exception("housekeeping error")
         await asyncio.sleep(HOUSEKEEPING_INTERVAL_SECONDS)
@@ -331,28 +357,48 @@ def _build_bot():
     return Bot(token=settings.BOT_TOKEN)
 
 
+async def _handle(bot, entry_id: str, payload: dict) -> None:
+    """Process one job and ack it. If process_job raises unexpectedly we do
+    NOT ack, so the entry stays pending and is reclaimed/retried (and
+    eventually dead-lettered) rather than silently lost."""
+    try:
+        await process_job(bot, payload)
+    except Exception:
+        log.exception("unhandled error processing entry %s (%s) — leaving unacked", entry_id, payload)
+        return
+    await ack_and_remove(entry_id)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     settings = get_settings()
     os.makedirs(settings.TEMP_DIR, exist_ok=True)
 
+    consumer = f"worker-{os.getpid()}"
+    await ensure_group()
+    await refresh_texts()  # warm the panel-editable text cache before serving
     bot = _build_bot()
     housekeeper = asyncio.create_task(housekeeping_loop(bot))
-    log.info("worker started, waiting for jobs on the queue")
+    log.info("worker %s started, waiting for jobs on the stream", consumer)
     try:
         while True:
             try:
-                payload = await dequeue(timeout=5)
+                # First retry anything a dead worker left pending, then take
+                # fresh work (blocking briefly so the loop is not a busy-wait).
+                reclaimed = await reclaim_stale(
+                    consumer, settings.QUEUE_MAX_DELIVERIES, settings.QUEUE_RECLAIM_IDLE_MS
+                )
+                for entry_id, payload in reclaimed:
+                    log.info("reclaimed stale job %s", entry_id)
+                    await _handle(bot, entry_id, payload)
+
+                entries = await read_new(consumer, count=1, block_ms=5000)
             except Exception as exc:  # redis hiccup — back off and retry
                 log.error("queue error: %s", exc)
                 await asyncio.sleep(3)
                 continue
-            if payload is None:
-                continue
-            try:
-                await process_job(bot, payload)
-            except Exception:
-                log.exception("unhandled error processing job %s", payload)
+            for entry_id, payload in entries:
+                await _handle(bot, entry_id, payload)
     finally:
         housekeeper.cancel()
 

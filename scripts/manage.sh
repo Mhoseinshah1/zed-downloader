@@ -39,6 +39,15 @@ api_health() {
     "${COMPOSE[@]}" exec -T api curl -fsS http://localhost:8000/health 2>/dev/null
 }
 
+# redis is password-protected (--requirepass). The redis container exports
+# REDISCLI_AUTH, so redis-cli inside it auto-authenticates — no need to pass
+# the password here. Grep for PONG instead of trusting redis-cli's exit code:
+# a bare `redis-cli ping` can exit 0 while printing a NOAUTH error, so it must
+# NOT be used as the health signal directly.
+redis_ping() {
+    "${COMPOSE[@]}" exec -T redis redis-cli ping 2>/dev/null | grep -q PONG
+}
+
 require_env() {
     [[ -f "$ENV_FILE" ]] || die "missing $ENV_FILE — run scripts/install.sh first."
 }
@@ -142,8 +151,7 @@ cmd_doctor() {
     check "api /health responding"       api_health
     check "postgres accepting connections" \
         "${COMPOSE[@]}" exec -T postgres pg_isready -U "$(env_get POSTGRES_USER)"
-    check "redis responding to PING" \
-        "${COMPOSE[@]}" exec -T redis redis-cli ping
+    check "redis responding to PING" redis_ping
 
     echo
     log "container states:"
