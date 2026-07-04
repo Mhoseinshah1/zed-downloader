@@ -130,16 +130,26 @@ def get_settings() -> Settings:
 
 @lru_cache
 def get_version() -> str:
-    """Semver from the repo-root VERSION file, with fallbacks for containers
-    where the file is outside the build context."""
-    candidates = [
-        Path(__file__).resolve().parents[3] / "VERSION",  # repo checkout
-        Path("/app/VERSION"),  # docker image, if copied
-    ]
+    """Return the app version safely in BOTH a repo checkout and the Docker
+    image. Never index parents[n] directly: in the image __file__ is
+    /app/app/config.py, which only has three parents, so parents[3] raised
+    IndexError and crashed app import (uvicorn never bound → /health 120s
+    timeout). We iterate parents instead."""
+    env_version = os.environ.get("APP_VERSION")
+    if env_version:
+        return env_version
+
+    current = Path(__file__).resolve()
+    candidates = [Path("/app/VERSION"), Path.cwd() / "VERSION"]
+    candidates += [parent / "VERSION" for parent in current.parents]
+
     for candidate in candidates:
         try:
             if candidate.is_file():
-                return candidate.read_text().strip()
+                value = candidate.read_text(encoding="utf-8").strip()
+                if value:
+                    return value
         except OSError:
             continue
-    return os.environ.get("APP_VERSION", "1.0.0")
+
+    return "1.0.0"
