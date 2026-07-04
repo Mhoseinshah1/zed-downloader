@@ -37,6 +37,15 @@ jobs:
           fi
       - name: Compile check
         run: python -m py_compile $(find apps/api/app -name '*.py')
+      - name: App import gate
+        # Catch import-time crashes (e.g. a bad path index in get_version)
+        # before they can only surface as a 120s health-check timeout at
+        # install. Dummy env satisfies required settings; engines are lazy.
+        env:
+          DATABASE_URL: sqlite+aiosqlite:///tmp/ci_check.db
+          REDIS_URL: redis://localhost:6379/0
+          JWT_SECRET: ci-check
+        run: cd apps/api && python -c "from app.main import app; print(app.title, app.version)"
       - name: Run tests
         run: cd apps/api && python -m pytest -q
 
@@ -70,7 +79,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Syntax check
-        run: bash -n scripts/*.sh
+        run: |
+          bash -n scripts/*.sh
+          bash -n apps/api/entrypoint.sh
 
   compose:
     name: Docker Compose config
