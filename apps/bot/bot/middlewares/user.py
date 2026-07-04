@@ -81,6 +81,7 @@ class UserMiddleware(BaseMiddleware):
                 lang = user.get("language") or _fallback_language(from_user)
                 _prune_cache(now)
                 _cache[from_user.id] = (now + _TTL_SECONDS, lang)
+                logger.info("user upserted: telegram_id=%s lang=%s", from_user.id, lang)
 
         data["lang"] = lang
         return await handler(event, data)

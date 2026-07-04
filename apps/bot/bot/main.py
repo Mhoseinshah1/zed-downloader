@@ -11,7 +11,7 @@ from aiohttp import web
 
 from bot import i18n
 from bot.config import Settings, get_settings
-from bot.handlers import download, help as help_handler, language, plans, start
+from bot.handlers import download, help as help_handler, language, menu, plans, start
 from bot.middlewares.user import UserMiddleware
 from bot.services import api_client
 
@@ -47,9 +47,11 @@ def build_dispatcher() -> Dispatcher:
     dp.callback_query.middleware(middleware)
 
     # Order matters: the download router has a catch-all text handler for
-    # private chats, so command routers must be registered before it.
+    # private chats, so command routers AND the menu router (which matches only
+    # menu-button texts) must be registered before it.
     dp.include_router(start.router)
     dp.include_router(language.router)
+    dp.include_router(menu.router)
     dp.include_router(help_handler.router)
     dp.include_router(plans.router)
     dp.include_router(download.router)
@@ -61,7 +63,7 @@ def build_dispatcher() -> Dispatcher:
 
 async def run_polling(bot: Bot, dp: Dispatcher) -> None:
     await bot.delete_webhook(drop_pending_updates=False)
-    logger.info("Starting bot in polling mode")
+    logger.info("bot started (polling mode)")
     await dp.start_polling(bot)
 
 

@@ -50,6 +50,18 @@ class DownloadRequestIn(BaseModel):
     language: str | None = None
 
 
+class DownloadRequestPlaceholderIn(BaseModel):
+    """Phase 2 placeholder intake (records the request, no real download)."""
+
+    telegram_id: int
+    url: str
+    chat_id: int | None = None
+    username: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    language: str | None = None
+
+
 class PlanPublicOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

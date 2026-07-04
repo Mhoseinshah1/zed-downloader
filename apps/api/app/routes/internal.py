@@ -11,13 +11,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
+from app.database import get_db, utcnow
 from app.models import DownloadRequest, ForcedJoinChannel, Group, Language, Plan, User
 from app.payments.base import PaymentGatewayError
 from app.providers.manager import manager
 from app.routes.deps import require_internal_secret
 from app.schemas.internal import (
     DownloadRequestIn,
+    DownloadRequestPlaceholderIn,
     GroupInternalOut,
     GroupUpsertIn,
     LanguageIn,
@@ -28,7 +29,8 @@ from app.schemas.internal import (
 )
 from app.services.payment_service import GATEWAYS, create_payment_record
 from app.services.ratelimit import is_rate_limited
-from app.services.subscription_service import check_access
+from app.services.subscription_service import active_subscription, check_access, get_setting
+from app.config import get_settings
 from app.workers.queue import enqueue
 
 log = logging.getLogger("zed.internal")
@@ -39,6 +41,12 @@ router = APIRouter(
 
 
 async def _upsert_user(db: AsyncSession, data: UserUpsertIn) -> User:
+    """Create or update a user keyed on telegram_id (never duplicates).
+
+    Profile fields and last_seen_at are refreshed on every call; language is
+    NOT overwritten on update (the user sets it explicitly via /language) but
+    seeds the row on first creation.
+    """
     result = await db.execute(select(User).where(User.telegram_id == data.telegram_id))
     user = result.scalar_one_or_none()
     if user is None:
@@ -48,15 +56,15 @@ async def _upsert_user(db: AsyncSession, data: UserUpsertIn) -> User:
             first_name=data.first_name,
             last_name=data.last_name,
             language=data.language or "fa",
+            last_seen_at=utcnow(),
         )
         db.add(user)
         await db.flush()
     else:
-        # Refresh profile fields; language is NOT overwritten here — the user
-        # picks it explicitly via the /language endpoint.
         user.username = data.username
         user.first_name = data.first_name
         user.last_name = data.last_name
+        user.last_seen_at = utcnow()
     return user
 
 
@@ -94,8 +102,52 @@ async def set_language(telegram_id: int, body: LanguageIn, db: AsyncSession = De
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     user.language = body.language
+    user.last_seen_at = utcnow()
     await db.commit()
     return {"ok": True}
+
+
+@router.get("/users/{telegram_id}")
+async def get_user_account(telegram_id: int, db: AsyncSession = Depends(get_db)) -> dict:
+    """Account summary for the bot's 'My Account' screen. 404 if unknown."""
+    result = await db.execute(select(User).where(User.telegram_id == telegram_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
+
+    sub = await active_subscription(db, user_id=user.id)
+    subscription = None
+    if sub is not None:
+        limit = sub.plan.download_limit if sub.plan else 0
+        subscription = {
+            "plan_name": sub.plan.name if sub.plan else None,
+            "expires_at": sub.expires_at.isoformat() if sub.expires_at else None,
+            "downloads_used": sub.downloads_used,
+            "download_limit": limit,  # 0 = unlimited
+        }
+
+    # Free-tier daily quota (informational; real enforcement lives in the
+    # download flow). Configurable via settings.free_downloads_per_day.
+    free_limit_raw = await get_setting(db, "free_downloads_per_day")
+    try:
+        free_limit = int(free_limit_raw) if free_limit_raw is not None else get_settings().FREE_DOWNLOADS_PER_DAY
+    except (TypeError, ValueError):
+        free_limit = get_settings().FREE_DOWNLOADS_PER_DAY
+
+    return {
+        "telegram_id": user.telegram_id,
+        "username": user.username,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "language": user.language,
+        "is_blocked": user.is_blocked,
+        "account_type": "subscription" if subscription else "free",
+        "total_downloads": user.total_downloads,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "last_seen_at": user.last_seen_at.isoformat() if user.last_seen_at else None,
+        "free_daily_quota": free_limit,
+        "subscription": subscription,
+    }
 
 
 @router.post("/groups/upsert", response_model=GroupInternalOut)
@@ -191,6 +243,52 @@ async def download_request(body: DownloadRequestIn, db: AsyncSession = Depends(g
         return {"status": "error", "reason": "queue_unavailable"}
 
     return {"status": "queued", "request_id": request.id}
+
+
+@router.post("/download-requests")
+async def create_download_request(
+    body: DownloadRequestPlaceholderIn, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Phase 2 placeholder intake: upsert the user, detect the platform, and
+    RECORD the request (status='received') WITHOUT enqueuing a real download.
+
+    Reuses the existing DownloadRequest model. 'received' rows are not swept by
+    the worker and do not consume any quota, so this is a safe log-only path
+    until the real queue is turned on in Phase 3.
+    """
+    user = await _upsert_user(
+        db,
+        UserUpsertIn(
+            telegram_id=body.telegram_id,
+            username=body.username,
+            first_name=body.first_name,
+            last_name=body.last_name,
+            language=body.language,
+        ),
+    )
+    group: Group | None = None
+    if body.chat_id is not None and body.chat_id < 0:  # Telegram group ids are negative
+        group = await _upsert_group(db, body.chat_id, None, None)
+
+    platform = await manager.resolve_platform(db, body.url)
+    url_hash = hashlib.sha256(body.url.encode("utf-8")).hexdigest()
+    request = DownloadRequest(
+        user_id=user.id,
+        group_id=group.id if group else None,
+        url=body.url,
+        url_hash=url_hash,
+        platform_id=platform.id if platform else None,
+        status="received",
+    )
+    db.add(request)
+    await db.commit()
+    await db.refresh(request)
+
+    return {
+        "status": "received",
+        "request_id": request.id,
+        "detected_platform": platform.slug if platform else "unknown",
+    }
 
 
 @router.get("/plans")
