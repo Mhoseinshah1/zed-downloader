@@ -39,7 +39,12 @@ services:
   redis:
     image: redis:7-alpine
     container_name: zed_redis
-    command: ["redis-server", "--appendonly", "yes"]
+    # Not published outside the compose network; additionally password-guarded
+    # (defense in depth). Empty REDIS_PASSWORD disables auth for local dev.
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-}"]
+    environment:
+      # redis-cli reads REDISCLI_AUTH automatically; empty = send no AUTH.
+      REDISCLI_AUTH: ${REDIS_PASSWORD:-}
     volumes:
       - redis_data:/data
     healthcheck:
@@ -58,7 +63,10 @@ services:
     # migrations + seed, then uvicorn on :8000.
     command: ["api"]
     env_file:
-      - ../.env
+      # Optional so `docker compose config` validates without a real
+      # secrets file; the installer always creates ../.env before `up`.
+      - path: ../.env
+        required: false
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,7 +88,10 @@ services:
     # Same image as api; "worker" role runs python -m app.workers.runner.
     command: ["worker"]
     env_file:
-      - ../.env
+      # Optional so `docker compose config` validates without a real
+      # secrets file; the installer always creates ../.env before `up`.
+      - path: ../.env
+        required: false
     depends_on:
       api:
         condition: service_started
@@ -95,7 +106,10 @@ services:
       context: ../apps/bot
     container_name: zed_bot
     env_file:
-      - ../.env
+      # Optional so `docker compose config` validates without a real
+      # secrets file; the installer always creates ../.env before `up`.
+      - path: ../.env
+        required: false
     depends_on:
       api:
         condition: service_started

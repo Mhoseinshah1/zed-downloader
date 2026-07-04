@@ -27,7 +27,8 @@ from app.schemas.internal import (
     UserUpsertIn,
 )
 from app.services.payment_service import GATEWAYS, create_payment_record
-from app.services.subscription_service import check_access, plans_for_user
+from app.services.ratelimit import is_rate_limited
+from app.services.subscription_service import check_access
 from app.workers.queue import enqueue
 
 log = logging.getLogger("zed.internal")
@@ -124,6 +125,11 @@ async def download_request(body: DownloadRequestIn, db: AsyncSession = Depends(g
     if body.chat_id is not None and body.chat_id < 0:  # Telegram group ids are negative
         group = await _upsert_group(db, body.chat_id, None, None)
 
+    # Throttle before doing any real work so spam can't flood the queue.
+    if await is_rate_limited(telegram_id=body.telegram_id, chat_id=body.chat_id):
+        await db.commit()  # keep the user/group upserts
+        return {"status": "denied", "reason": "rate_limited"}
+
     platform = await manager.resolve_platform(db, body.url)
     if platform is None:
         await db.commit()  # keep the user/group upserts
@@ -188,8 +194,29 @@ async def download_request(body: DownloadRequestIn, db: AsyncSession = Depends(g
 
 
 @router.get("/plans")
-async def list_plans(db: AsyncSession = Depends(get_db)) -> dict:
-    return {"plans": _plan_payload(await plans_for_user(db))}
+async def list_plans(scope: str = "user", db: AsyncSession = Depends(get_db)) -> dict:
+    """Active plans for a scope ('user' by default, 'group' for group buys)."""
+    if scope not in ("user", "group"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "scope must be 'user' or 'group'")
+    result = await db.execute(
+        select(Plan)
+        .where(Plan.is_active.is_(True), Plan.scope == scope)
+        .order_by(Plan.sort_order.asc(), Plan.price.asc())
+    )
+    return {"plans": _plan_payload(list(result.scalars()))}
+
+
+@router.get("/texts")
+async def list_texts(db: AsyncSession = Depends(get_db)) -> dict:
+    """All panel-editable bot texts, for the bot to overlay on its bundled
+    i18n. Shape: {lang: {key: value}}."""
+    from app.models import BotText
+
+    rows = (await db.execute(select(BotText))).scalars().all()
+    texts: dict[str, dict[str, str]] = {}
+    for row in rows:
+        texts.setdefault(row.lang, {})[row.key] = row.value
+    return {"texts": texts}
 
 
 @router.get("/forced-join")
@@ -217,13 +244,23 @@ async def payments_create(body: PaymentCreateIn, db: AsyncSession = Depends(get_
     plan = await db.get(Plan, body.plan_id)
     if plan is None or not plan.is_active:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "plan not found or inactive")
-    if plan.scope != "user":
-        # Group-scope purchase through the bot is a v2 seam; selling it here
-        # would charge the user for a subscription nobody can use.
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "plan is not purchasable by users")
+
+    group: Group | None = None
+    if plan.scope == "group":
+        # A group-scope plan must be bought from within the target group so we
+        # know which group the subscription activates for.
+        if body.chat_id is None or body.chat_id >= 0:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "group plans must be purchased from inside the group",
+            )
+        group = await _upsert_group(db, body.chat_id, None, None)
+    elif plan.scope != "user":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"plan scope '{plan.scope}' is not purchasable")
+
     try:
         payment, payment_url = await create_payment_record(
-            db, user=user, plan=plan, gateway_name=body.gateway
+            db, user=user, plan=plan, gateway_name=body.gateway, group=group
         )
     except PaymentGatewayError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"gateway error: {exc}")

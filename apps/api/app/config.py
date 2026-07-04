@@ -18,7 +18,11 @@ class Settings(BaseSettings):
 
     # Core connections
     DATABASE_URL: str
+    # REDIS_URL may embed the password (redis://:PASS@redis:6379/0). Redis is
+    # not exposed outside the compose network, and the installer additionally
+    # sets a password (defense in depth).
     REDIS_URL: str
+    REDIS_PASSWORD: str = ""
 
     # Security
     JWT_SECRET: str
@@ -52,9 +56,36 @@ class Settings(BaseSettings):
     ZARINPAL_SANDBOX: bool = True
     PAYMENT_CALLBACK_BASE_URL: str = ""
 
+    # Rate limiting: per-identity download-request throttle (Redis-backed
+    # sliding window). Applies independently to the telegram user and, in
+    # groups, the chat.
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_MAX_REQUESTS: int = 5
+    RATE_LIMIT_WINDOW_SECONDS: int = 60
+
+    # Reliable queue (Redis Streams): how many times a job may be reclaimed
+    # after a worker died mid-processing before it is dead-lettered, and how
+    # long a pending (unacked) entry must idle before another worker reclaims it.
+    QUEUE_MAX_DELIVERIES: int = 3
+    QUEUE_RECLAIM_IDLE_MS: int = 600_000  # 10 minutes
+
+    # Ads: send a random weighted active ad around downloads.
+    ADS_ENABLED: bool = True
+    ADS_PLACEMENT: str = "after"  # before | after | both
+
     # Misc
     DOMAIN: str = ""
-    CORS_ORIGINS: str = "*"
+    # Comma-separated allowed origins for the admin panel. Default is
+    # restrictive (same-origin only): production MUST set this to the panel's
+    # public origin (the installer sets https://$DOMAIN). "*" is allowed only
+    # as an explicit, deliberate opt-out — see cors_origins_list.
+    CORS_ORIGINS: str = ""
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENV.lower() in ("prod", "production")
+
+    ENV: str = "production"
 
     # The official Bot API rejects bot uploads bigger than ~50 MB.
     OFFICIAL_BOT_API_UPLOAD_CAP_MB: int = 50
@@ -72,7 +103,18 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> list[str]:
+        """Explicit allowed origins. An empty setting means same-origin only
+        (no cross-origin access) — NOT a wildcard. In production the panel is
+        served from the same host via Caddy, so cross-origin access is not
+        needed; a developer can set CORS_ORIGINS=http://localhost:5173 for the
+        Vite dev server, or CORS_ORIGINS=* to deliberately allow any origin."""
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
+    @property
+    def cors_allow_credentials(self) -> bool:
+        # The CORS spec forbids credentials with a "*" origin; browsers reject
+        # it. Only allow credentials when origins are explicitly enumerated.
+        return self.cors_origins_list != ["*"] and bool(self.cors_origins_list)
 
     @property
     def payment_callback_base(self) -> str:

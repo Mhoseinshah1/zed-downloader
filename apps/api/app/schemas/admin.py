@@ -173,3 +173,118 @@ class ProviderPatch(BaseModel):
     timeout: int | None = None
     settings: dict | None = None
     is_active: bool | None = None
+
+
+# --- Ads ----------------------------------------------------------------------
+
+class AdOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    content: str
+    media_url: str | None = None
+    is_active: bool
+    weight: int
+    created_at: dt.datetime
+
+
+class AdIn(BaseModel):
+    title: str
+    content: str
+    media_url: str | None = None
+    is_active: bool = True
+    weight: int = 1
+
+
+class AdPatch(BaseModel):
+    title: str | None = None
+    content: str | None = None
+    media_url: str | None = None
+    is_active: bool | None = None
+    weight: int | None = None
+
+
+# --- Forced-join channels ------------------------------------------------------
+
+class ForcedJoinOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    channel_id: int | None = None
+    username: str
+    title: str | None = None
+    is_active: bool
+    sort_order: int
+
+
+class ForcedJoinIn(BaseModel):
+    username: str
+    channel_id: int | None = None
+    title: str | None = None
+    is_active: bool = True
+    sort_order: int = 0
+
+
+class ForcedJoinPatch(BaseModel):
+    username: str | None = None
+    channel_id: int | None = None
+    title: str | None = None
+    is_active: bool | None = None
+    sort_order: int | None = None
+
+
+# --- Bot texts ----------------------------------------------------------------
+
+class BotTextOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    key: str
+    lang: str
+    value: str
+
+
+class BotTextIn(BaseModel):
+    key: str
+    lang: str
+    value: str
+
+
+class BotTextPatch(BaseModel):
+    value: str
+
+
+# --- Settings -----------------------------------------------------------------
+
+class SettingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    key: str
+    value: str | None = None
+    description: str | None = None
+
+
+class SettingIn(BaseModel):
+    value: str | None = None
+
+
+# --- Downloads ----------------------------------------------------------------
+
+class DownloadOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: int | None = None
+    group_id: int | None = None
+    url: str
+    platform_id: int | None = None
+    provider_id: int | None = None
+    status: str
+    error_code: str | None = None
+    file_name: str | None = None
+    file_size: int | None = None
+    file_type: str | None = None
+    consumed_from: str | None = None
+    created_at: dt.datetime
+    completed_at: dt.datetime | None = None

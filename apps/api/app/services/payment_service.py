@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import utcnow
-from app.models import Payment, Plan, Subscription, User
+from app.models import Group, Payment, Plan, Subscription, User
 from app.payments.base import BasePaymentProvider, PaymentGatewayError
 from app.payments.zarinpal import ZarinpalGateway
 
@@ -37,16 +37,20 @@ def build_gateway(name: str) -> BasePaymentProvider:
 
 
 async def create_payment_record(
-    session: AsyncSession, *, user: User, plan: Plan, gateway_name: str
+    session: AsyncSession, *, user: User, plan: Plan, gateway_name: str, group: Group | None = None
 ) -> tuple[Payment, str]:
     """Create a pending payment row + a gateway payment session.
-    Returns (payment, redirect_url). Commits on success."""
+    Returns (payment, redirect_url). Commits on success.
+
+    For group-scope plans, `group` is the group the resulting subscription
+    activates for (the purchasing user still pays)."""
     gateway = build_gateway(gateway_name)
     settings = get_settings()
 
     payment = Payment(
         user_id=user.id,
         plan_id=plan.id,
+        group_id=group.id if group is not None else None,
         gateway=gateway_name,
         amount=plan.price,
         currency=plan.currency,
@@ -77,19 +81,26 @@ async def activate_subscription(session: AsyncSession, payment: Payment) -> Subs
     plan = await session.get(Plan, payment.plan_id)
     if plan is None:  # defensive: FK guarantees this in practice
         raise PaymentGatewayError(f"payment {payment.id} references missing plan {payment.plan_id}")
-    if plan.scope != "user":
-        # Backstop for the guard in the payment-creation route (closes the
-        # window where an admin flips a plan's scope mid-payment). Raising
-        # here rolls the transaction back, so the payment stays visible as
-        # pending for manual refund instead of silently crediting nobody.
-        # NOTE: group-scope purchase (setting group_id) is a v2 seam.
-        raise PaymentGatewayError(
-            f"plan {plan.id} has scope '{plan.scope}' — only user-scope plans are activatable"
-        )
+
+    # Resolve the subscription owner from the plan scope. A mismatch (e.g. a
+    # group-scope payment with no group recorded) raises, which rolls the
+    # transaction back and leaves the payment pending for manual refund —
+    # never a silently mis-credited or orphaned subscription.
+    if plan.scope == "user":
+        sub_user_id: int | None = payment.user_id
+        sub_group_id: int | None = None
+    elif plan.scope == "group":
+        if payment.group_id is None:
+            raise PaymentGatewayError(f"group-scope payment {payment.id} has no group recorded")
+        sub_user_id = None
+        sub_group_id = payment.group_id
+    else:
+        raise PaymentGatewayError(f"plan {plan.id} has unknown scope '{plan.scope}'")
+
     now = utcnow()
     subscription = Subscription(
-        user_id=payment.user_id,
-        group_id=None,
+        user_id=sub_user_id,
+        group_id=sub_group_id,
         plan_id=plan.id,
         starts_at=now,
         expires_at=now + dt.timedelta(days=plan.duration_days),

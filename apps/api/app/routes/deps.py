@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.database import get_db
 from app.models import Admin
+from app.services.auth_service import is_token_revoked
 from app.utils.security import decode_token
 
 _bearer = HTTPBearer(auto_error=False)
@@ -30,6 +31,8 @@ async def get_current_admin(
         raise _unauthorized("invalid or expired token")
     if payload.get("type") != "access":
         raise _unauthorized("access token required")
+    if await is_token_revoked(db, payload):
+        raise _unauthorized("token has been revoked")
     admin = await db.get(Admin, int(payload.get("sub", 0)))
     if admin is None or not admin.is_active:
         raise _unauthorized("admin not found or disabled")

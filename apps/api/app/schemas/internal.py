@@ -66,3 +66,5 @@ class PaymentCreateIn(BaseModel):
     telegram_id: int
     plan_id: int
     gateway: str = "zarinpal"
+    # Required for group-scope plans: the group chat the subscription is for.
+    chat_id: int | None = None

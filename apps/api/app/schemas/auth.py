@@ -11,6 +11,12 @@ class RefreshIn(BaseModel):
     refresh_token: str
 
 
+class LogoutIn(BaseModel):
+    # Optional: when provided, the refresh token is revoked too (not just the
+    # access token from the Authorization header).
+    refresh_token: str | None = None
+
+
 class AdminOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
