@@ -73,12 +73,14 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      # NOTE: requires curl inside the api image (apps/api Dockerfile).
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # curl is installed in the api image (apps/api Dockerfile). /health is
+      # DB-independent, so this goes green as soon as uvicorn is up. The long
+      # start_period covers first-boot migrate+seed before uvicorn starts.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 30s
+      retries: 10
+      start_period: 60s
     restart: unless-stopped
 
   worker:

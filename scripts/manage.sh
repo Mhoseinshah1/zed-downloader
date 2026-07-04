@@ -175,6 +175,29 @@ cmd_version() {
     echo "commit:  $(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 }
 
+cmd_reset_db() {
+    # Recovery for the classic "API can't authenticate to Postgres" failure:
+    # Postgres bakes its password into the data volume at first init and
+    # ignores POSTGRES_PASSWORD forever after, so a regenerated password in
+    # .env no longer matches. Removing the volume lets it re-init cleanly.
+    require_env
+    warn "reset-db DELETES ALL DATABASE DATA (users, subscriptions, payments, downloads)."
+    if [[ "${FORCE:-0}" != "1" ]]; then
+        printf "Type 'yes' to continue: "
+        read -r ans
+        [[ "$ans" == "yes" ]] || die "aborted"
+    fi
+    log "stopping the stack"
+    "${COMPOSE[@]}" down
+    # Compose project name is pinned to 'zed-downloader' in the compose file.
+    local vol="zed-downloader_postgres_data"
+    log "removing postgres volume: $vol"
+    docker volume rm "$vol" >/dev/null 2>&1 || warn "volume $vol not found (already removed?)"
+    log "starting the stack — postgres re-initializes with the current .env password"
+    "${COMPOSE[@]}" up -d --build
+    log "done. Watch it come up with: zed-downloader status"
+}
+
 usage() {
     cat <<EOF
 zed-downloader — management CLI (app dir: $APP_DIR)
@@ -193,6 +216,8 @@ Commands:
   set-webhook         Register the Telegram webhook for RUN_MODE=webhook
   delete-webhook      Remove the Telegram webhook (back to polling)
   doctor              Run health diagnostics
+  reset-db            Recreate the Postgres volume (DESTROYS data) — fixes a
+                      password mismatch after regenerating secrets
   version             Show app version and git commit
   help                Show this help
 
@@ -217,6 +242,7 @@ main() {
         set-webhook)     cmd_set_webhook "$@" ;;
         delete-webhook)  cmd_delete_webhook "$@" ;;
         doctor)          cmd_doctor "$@" ;;
+        reset-db)        cmd_reset_db "$@" ;;
         version)         cmd_version "$@" ;;
         help|-h|--help)  usage ;;
         *)

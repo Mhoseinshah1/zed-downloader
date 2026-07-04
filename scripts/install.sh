@@ -277,14 +277,50 @@ log "management CLI installed: zed-downloader (try: zed-downloader help)"
 # relative paths inside the compose file stay anchored to deploy/.
 COMPOSE=(docker compose -f "$APP_DIR/deploy/docker-compose.yml" --env-file "$APP_DIR/.env")
 
+# ------------------------------------------------------------- preflight
+# Catch broken files / config BEFORE spending minutes on a build that can only
+# fail. Every check is fatal (die) with a specific message.
+preflight() {
+    log "preflight checks..."
+
+    for f in deploy/docker-compose.yml apps/api/entrypoint.sh apps/api/Dockerfile \
+             apps/api/requirements.txt apps/bot/requirements.txt VERSION .env; do
+        [[ -f "$APP_DIR/$f" ]] || die "preflight: required file missing: $f"
+    done
+
+    # Shell scripts must parse.
+    for s in "$APP_DIR"/scripts/*.sh "$APP_DIR/apps/api/entrypoint.sh"; do
+        bash -n "$s" || die "preflight: shell syntax error in $s"
+    done
+
+    # .env must carry the settings the API needs to even import its config.
+    for key in DATABASE_URL REDIS_URL JWT_SECRET POSTGRES_PASSWORD; do
+        val="$(grep "^${key}=" "$APP_DIR/.env" | cut -d= -f2-)"
+        [[ -n "$val" && "$val" != "change-me" ]] || die "preflight: .env is missing a real value for ${key}"
+    done
+
+    # The password inside DATABASE_URL must match POSTGRES_PASSWORD, or the API
+    # can never authenticate (the classic 120s-timeout failure).
+    local pg_pw db_pw
+    pg_pw="$(grep '^POSTGRES_PASSWORD=' "$APP_DIR/.env" | cut -d= -f2-)"
+    db_pw="$(grep '^DATABASE_URL=' "$APP_DIR/.env" | sed -n 's#.*://[^:]*:\([^@]*\)@.*#\1#p')"
+    [[ "$pg_pw" == "$db_pw" ]] || die "preflight: POSTGRES_PASSWORD does not match the password in DATABASE_URL"
+
+    # Compose file must be valid with this .env.
+    "${COMPOSE[@]}" config >/dev/null 2>&1 || die "preflight: 'docker compose config' failed — run it manually to see why"
+
+    log "preflight OK"
+}
+preflight
+
 log "building and starting the stack (first build can take several minutes)"
 "${COMPOSE[@]}" up -d --build
 
 # NOTE: the API port is not published on the host, so the health probe
 # runs inside the api container (curl http://localhost:8000/health).
-log "waiting for the API to become healthy (up to ~120s)"
+log "waiting for the API to become healthy (up to ~180s)"
 healthy=0
-for _ in $(seq 1 60); do
+for _ in $(seq 1 90); do
     if "${COMPOSE[@]}" exec -T api curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
         healthy=1
         break
@@ -293,8 +329,21 @@ for _ in $(seq 1 60); do
 done
 
 if [[ "$healthy" -ne 1 ]]; then
-    err "API did not become healthy within 120s."
-    err "inspect with: zed-downloader logs api"
+    err "API did not become healthy in time. Dumping diagnostics — do not panic, the"
+    err "cause is almost always printed in the api logs below."
+    echo "------------------------------------------------------------------ containers"
+    docker ps -a --filter "name=zed_" 2>/dev/null || docker ps -a
+    echo "------------------------------------------------------- zed_api health state"
+    docker inspect zed_api --format '{{json .State.Health}}' 2>/dev/null || true
+    echo "----------------------------------------------------- zed_api logs (tail 300)"
+    docker logs zed_api --tail=300 2>&1 || "${COMPOSE[@]}" logs --tail=300 api 2>&1 || true
+    echo "----------------------------------------------------------------------------"
+    if docker logs zed_api 2>&1 | grep -q "28P01\|password authentication failed\|initialized with a DIFFERENT password"; then
+        err "ROOT CAUSE: the API cannot authenticate to Postgres. The postgres data"
+        err "volume was initialized with a different password than the current .env."
+        err "FIX (this DELETES database data): zed-downloader reset-db   then re-run install."
+    fi
+    err "More: zed-downloader logs api   |   zed-downloader status"
     exit 1
 fi
 
