@@ -14,13 +14,19 @@
 ## امکانات
 
 - ربات تلگرام (aiogram 3) با پیام‌های **فارسی و انگلیسی** (ساختار آمادهٔ افزودن ۱۴ زبان دیگر)
+- **متن‌های ربات قابل ویرایش از پنل**: پیام‌ها از دیتابیس روی i18n پیش‌فرض overlay می‌شوند (بدون نیاز به استقرار مجدد)
 - دانلود از پلتفرم‌های مختلف با معماری «ارائه‌دهنده» (Provider) و جایگزینی خودکار (fallback) بر اساس اولویت
 - محدودیت دانلود روزانهٔ رایگان + پلن‌های اشتراک قابل تعریف از پنل
+- **اشتراک گروهی**: پلن مخصوص گروه از داخل همان گروه خریداری می‌شود و سهمیه بین اعضا مشترک است
+- **محدودیت نرخ** درخواست‌ها به‌ازای هر کاربر و هر گروه (fixed-window مبتنی بر Redis، با رفتار fail-open)
 - پرداخت با **زرین‌پال** (حالت سندباکس برای تست) — معماری آماده برای درگاه‌های بیشتر
+- **تبلیغات وزن‌دار**: نمایش تصادفیِ آگهی فعال، قبل/بعد از دانلود، قابل مدیریت از پنل
 - عضویت اجباری در کانال‌ها (Forced Join) قابل تنظیم
 - پشتیبانی از گروه‌ها (فعال/غیرفعال‌سازی هر گروه)
 - پنل مدیریت React با داشبورد آمار، مدیریت کاربران، نقش‌های ادمین و نشانگر سلامت سرویس‌ها
-- صف دانلود مبتنی بر Redis؛ ورکر جدا از ربات، فایل را مستقیم به چت تلگرام ارسال می‌کند
+- **صف دانلود مطمئن** مبتنی بر Redis Streams (consumer group، بازیابی کارهای ورکرِ کرش‌کرده و dead-letter)؛ ورکر جدا از ربات، فایل را مستقیم به چت تلگرام ارسال می‌کند
+- **سخت‌سازی امنیتی**: CORS پیش‌فرض same-origin، رمز عبور برای Redis، و باطل‌سازی توکن ادمین هنگام خروج (access + refresh)
+- **CI و انتشار خودکار**: تست‌ها روی هر push/PR، و ساخت GitHub Release با tag نسخه
 - نصب تک‌فرمانی با Docker Compose + Caddy (گواهی HTTPS خودکار)
 - ابزار خط فرمان `zed-downloader` برای وضعیت، بروزرسانی، پشتیبان‌گیری و بازگردانی
 
@@ -58,11 +64,11 @@ sudo bash scripts/install.sh
 
 - درگاه‌های پرداخت زیبال، Telegram Stars، TON و TRON (USDT)
 - ۱۴ فایل زبان باقی‌مانده (ساختار i18n از الان آماده است)
-- حدود ۱۸ صفحهٔ باقی‌ماندهٔ پنل مدیریت — API آن‌ها از الان موجود است
-- آمار پیشرفته و خروجی CSV، ارسال پیام همگانی، پشتیبان‌گیری و بروزرسانی از داخل پنل
-- ارائه‌دهنده‌های دانلود بیشتر، پایش سلامت و هشدارها
+- صفحه‌های باقی‌ماندهٔ پنل (زبان‌ها، پیام همگانی، ادمین‌ها، پشتیبان‌گیری، بروزرسانی، پایش سلامت)
+- آمار پیشرفته و خروجی CSV
+- سرور خودمیزبان `telegram-bot-api` برای آپلود فایل‌های بزرگ‌تر از ۵۰ مگابایت
 
-مستندات کامل (انگلیسی): [نصب](docs/INSTALL.md) · [بروزرسانی](docs/UPDATE.md) · [ارائه‌دهنده‌ها](docs/PROVIDERS.md) · [پرداخت‌ها](docs/PAYMENTS.md) · [مرجع API](docs/API.md) · [پنل مدیریت](docs/ADMIN.md)
+مستندات کامل (انگلیسی): [نصب](docs/INSTALL.md) · [بروزرسانی](docs/UPDATE.md) · [ارائه‌دهنده‌ها](docs/PROVIDERS.md) · [پرداخت‌ها](docs/PAYMENTS.md) · [مرجع API](docs/API.md) · [پنل مدیریت](docs/ADMIN.md) · [عملیات](docs/OPERATIONS.md) · [انتشار](docs/RELEASING.md)
 
 </div>
 
@@ -82,12 +88,18 @@ A user sends the link of a **public** post (Instagram, YouTube, ...) to the bot;
 ## Features
 
 - Telegram bot (aiogram 3) with **Persian + English** messages, structured so 14 more languages can be dropped in as JSON files
+- **Panel-editable bot texts**: messages are overlaid from the database onto the shipped i18n — no redeploy to reword the bot
 - Multi-platform downloads through a pluggable **provider architecture** with priority-based automatic fallback
 - Free daily download quota + subscription plans configurable from the panel
+- **Group subscriptions**: a group-scope plan is bought from inside the group and its quota is shared by all members
+- **Rate limiting**: per-user and per-group-chat fixed-window throttle on download requests (Redis-backed, fails open)
 - **Zarinpal** payment gateway (sandbox toggle for testing); gateway registry ready for more
+- **Weighted ads**: a random active ad sent before/after downloads, managed from the panel
 - Forced channel join, group enable/disable, user blocking, maintenance mode
 - React 18 admin panel: dashboard stats, user management, role-based admins, service health badges
-- Redis-backed download queue; a dedicated worker (not the bot) uploads the file straight to the Telegram chat
+- **Reliable download queue** on Redis Streams — consumer group, reclaim of jobs orphaned by a crashed worker, and a dead-letter stream; a dedicated worker (not the bot) uploads the file straight to the Telegram chat
+- **Hardened by default**: same-origin CORS, a password-protected Redis, and admin logout that revokes both the access and refresh tokens
+- **CI + automated releases**: per-component checks on every push/PR, and a tagged GitHub Release gated on the `VERSION` file
 - One-command install with Docker Compose + Caddy (automatic HTTPS via Let's Encrypt)
 - `zed-downloader` CLI for status, logs, update (with auto-rollback), backup, and restore
 
@@ -180,7 +192,7 @@ zed-downloader/
 │   └── admin/            # React 18 + Vite admin panel
 ├── deploy/               # docker-compose.yml, caddy/Caddyfile
 ├── scripts/              # install.sh, manage.sh, update.sh, backup.sh, restore.sh
-└── docs/                 # INSTALL, UPDATE, PROVIDERS, PAYMENTS, API, ADMIN
+└── docs/                 # INSTALL, UPDATE, PROVIDERS, PAYMENTS, API, ADMIN, OPERATIONS, RELEASING
 ```
 
 ## Documentation
@@ -193,17 +205,18 @@ zed-downloader/
 | [docs/PAYMENTS.md](docs/PAYMENTS.md) | Payment architecture, money-safety invariants, Zarinpal flow, adding a gateway |
 | [docs/API.md](docs/API.md) | Full HTTP route reference (admin, internal, public) |
 | [docs/ADMIN.md](docs/ADMIN.md) | Admin panel guide + role model |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | Rate limiting, reliable queue, ads, editable texts, CORS/Redis/auth hardening |
+| [docs/RELEASING.md](docs/RELEASING.md) | Versioning, tags, CI, and the release workflow |
 
 ## Roadmap (v2)
 
 - Payment gateways: **Zibal**, **Telegram Stars**, **TON**, **TRON (USDT)**
 - The remaining **14 language JSONs** (i18n structure already in place)
-- The remaining **~18 admin panel pages** — their APIs already exist (groups, plans, payments, platforms, providers, ...)
+- The remaining **stub panel pages**: languages, broadcast, admins, backup, update, health monitoring (see [docs/ADMIN.md](docs/ADMIN.md#remaining-stubs-v2))
 - Advanced statistics + CSV export
 - Broadcast messages to users from the panel
 - In-panel backup & update
-- More download providers
-- Health monitoring and alerting
+- A self-hosted `telegram-bot-api` server to lift the ~50 MB bot-upload cap (for files up to `MAX_FILE_SIZE_MB`)
 
 ## License
 
