@@ -18,6 +18,9 @@ class User(TimestampMixin, Base):
     language: Mapped[str] = mapped_column(String(8), default="fa", nullable=False)
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     total_downloads: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Refreshed on every interaction (Phase 2). Nullable so the additive
+    # migration is safe on an existing table.
+    last_seen_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Group(TimestampMixin, Base):

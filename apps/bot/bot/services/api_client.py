@@ -161,6 +161,41 @@ async def request_download(
     )
 
 
+async def get_user_account(telegram_id: int) -> dict[str, Any] | None:
+    """GET /api/internal/users/{telegram_id} -> account summary, or None."""
+    return await _get(f"/api/internal/users/{telegram_id}")
+
+
+async def create_download_request(
+    telegram_id: int,
+    url: str,
+    chat_id: int | None = None,
+    username: str | None = None,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    language: str | None = None,
+) -> dict[str, Any] | None:
+    """POST /api/internal/download-requests (Phase 2 placeholder intake).
+
+    Records the request without triggering a real download. Returns
+    {status: "received", request_id, detected_platform} or None on error.
+    """
+    return await _post(
+        "/api/internal/download-requests",
+        _clean(
+            {
+                "telegram_id": telegram_id,
+                "chat_id": chat_id,
+                "url": url,
+                "username": username,
+                "first_name": first_name,
+                "last_name": last_name,
+                "language": language,
+            }
+        ),
+    )
+
+
 async def get_plans(scope: str = "user") -> list[dict[str, Any]] | None:
     """GET /api/internal/plans?scope=user|group -> list of plan dicts, or None.
 

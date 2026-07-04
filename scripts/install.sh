@@ -264,6 +264,9 @@ set_env WEBHOOK_BASE_URL        "https://${DOMAIN}"
 # values.
 set_env ENV                     "production"
 set_env CORS_ORIGINS            ""
+# Real app version from the repo VERSION file (baked into the image + reported
+# by /health and /ready).
+set_env APP_VERSION             "$(cat "$APP_DIR/VERSION" 2>/dev/null || echo 1.0.0)"
 log ".env written"
 
 # ------------------------------------------------------------ CLI installer
@@ -335,8 +338,12 @@ if [[ "$healthy" -ne 1 ]]; then
     docker ps -a --filter "name=zed_" 2>/dev/null || docker ps -a
     echo "------------------------------------------------------- zed_api health state"
     docker inspect zed_api --format '{{json .State.Health}}' 2>/dev/null || true
-    echo "----------------------------------------------------- zed_api logs (tail 300)"
-    docker logs zed_api --tail=300 2>&1 || "${COMPOSE[@]}" logs --tail=300 api 2>&1 || true
+    echo "----------------------------------------------------- zed_api logs (tail 200)"
+    docker logs zed_api --tail=200 2>&1 || "${COMPOSE[@]}" logs --tail=200 api 2>&1 || true
+    echo "----------------------------------------------------- zed_bot logs (tail 100)"
+    docker logs zed_bot --tail=100 2>&1 || "${COMPOSE[@]}" logs --tail=100 bot 2>&1 || true
+    echo "---------------------------------------------------- zed_worker logs (tail 100)"
+    docker logs zed_worker --tail=100 2>&1 || "${COMPOSE[@]}" logs --tail=100 worker 2>&1 || true
     echo "----------------------------------------------------------------------------"
     if docker logs zed_api 2>&1 | grep -q "28P01\|password authentication failed\|initialized with a DIFFERENT password"; then
         err "ROOT CAUSE: the API cannot authenticate to Postgres. The postgres data"
@@ -345,6 +352,16 @@ if [[ "$healthy" -ne 1 ]]; then
     fi
     err "More: zed-downloader logs api   |   zed-downloader status"
     exit 1
+fi
+
+# Health (liveness) passed. Also probe readiness (DB + Redis) — informational:
+# real traffic is served once this is ready, but a transient not-ready here does
+# not fail the install (dependencies may still be warming up).
+if "${COMPOSE[@]}" exec -T api curl -fsS http://localhost:8000/ready >/dev/null 2>&1; then
+    log "API readiness (/ready): OK — database and Redis reachable"
+else
+    err "API is healthy but /ready is not OK yet (database or Redis still warming up)."
+    err "Check shortly with: zed-downloader status"
 fi
 
 # ------------------------------------------------------------------ summary
