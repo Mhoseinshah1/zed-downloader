@@ -106,10 +106,17 @@ export default function Providers() {
       }
     }
 
+    // The backend requires a platform (providers route by platform), and a
+    // null platform_id 422s on create / 404s on patch — enforce it here.
+    if (form.platform_id === "") {
+      setFormError("providers.platformRequired");
+      return;
+    }
+
     const payload = {
       name: form.name.trim(),
       slug: form.slug.trim(),
-      platform_id: form.platform_id === "" ? null : Number(form.platform_id),
+      platform_id: Number(form.platform_id),
       provider_type: form.provider_type,
       base_url: form.base_url.trim() || null,
       priority: form.priority === "" ? 0 : Number(form.priority),

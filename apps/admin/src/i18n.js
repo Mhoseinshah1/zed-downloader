@@ -187,6 +187,7 @@ const messages = {
     "providers.new": "سرویس‌دهنده جدید",
     "providers.edit": "ویرایش سرویس‌دهنده",
     "providers.invalidJson": "قالب JSON نامعتبر است.",
+    "providers.platformRequired": "انتخاب پلتفرم الزامی است.",
     "providers.anyPlatform": "بدون پلتفرم",
 
     "settings.key": "کلید",
@@ -401,6 +402,7 @@ const messages = {
     "providers.new": "New provider",
     "providers.edit": "Edit provider",
     "providers.invalidJson": "Invalid JSON.",
+    "providers.platformRequired": "Please select a platform.",
     "providers.anyPlatform": "No platform",
 
     "settings.key": "Key",
