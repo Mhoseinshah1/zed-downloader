@@ -9,16 +9,17 @@
 # Usage:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/Mhoseinshah1/zed-downloader/main/scripts/remote-update.sh)
 #
-# Env: ZED_DIR (install dir, default /opt/zed-downloader), REPO_URL.
+# Env: ZED_DIR  (install dir, default /opt/zed-downloader)
+#      ZED_REPO (clone URL, default the official repository)
 # ==========================================================================
 set -euo pipefail
 
 APP_DIR="${ZED_DIR:-/opt/zed-downloader}"
-REPO_URL="${REPO_URL:-https://github.com/Mhoseinshah1/zed-downloader.git}"
+ZED_REPO="${ZED_REPO:-https://github.com/Mhoseinshah1/zed-downloader.git}"
 
 if [[ ! -d "$APP_DIR/.git" ]]; then
-    echo "[zed] $APP_DIR is not a checkout — cloning $REPO_URL"
-    git clone "$REPO_URL" "$APP_DIR"
+    echo "[zed] $APP_DIR is not a checkout — cloning $ZED_REPO"
+    git clone "$ZED_REPO" "$APP_DIR"
 fi
 
-exec bash "$APP_DIR/scripts/update.sh"
+exec bash "$APP_DIR/scripts/update.sh" "$@"

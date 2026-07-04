@@ -12,19 +12,22 @@ set -euo pipefail
 # --- self-update safety -----------------------------------------------------
 # `git reset --hard` below rewrites this very file on disk. Bash reads a script
 # lazily as it executes, so replacing it mid-run can corrupt execution. Guard:
-# on first entry, copy ourselves to /tmp and re-exec from there (flagged so we
-# do not loop). Every git/rebuild step then runs from the stable temp copy.
+# on first entry, copy ourselves to a mktemp file under /tmp and re-exec from
+# there (ZED_UPDATE_REEXEC=1 ensures this happens exactly once — no loop).
+# Every git/rebuild step then runs from the stable temp copy.
 if [[ "${ZED_UPDATE_REEXEC:-0}" != "1" ]]; then
     _self="$0"
     case "$_self" in /*) : ;; *) _self="$(pwd)/$_self" ;; esac
-    _copy="/tmp/zed-update.$$.sh"
+    _copy="$(mktemp /tmp/zed-update.XXXXXX.sh)" \
+        || { echo "[zed] ERROR: could not create temp updater copy" >&2; exit 1; }
     cp "$_self" "$_copy" || { echo "[zed] ERROR: could not stage updater copy" >&2; exit 1; }
     chmod +x "$_copy"
     export ZED_UPDATE_REEXEC=1
+    export ZED_UPDATE_SELF="$_copy"
     exec bash "$_copy" "$@"
 fi
-# Running from the temp copy now — clean it up on exit ($$ is unchanged by exec).
-trap 'rm -f "/tmp/zed-update.$$.sh"' EXIT
+# Running from the temp copy now — delete it when this run ends, however it ends.
+trap '[[ -n "${ZED_UPDATE_SELF:-}" ]] && rm -f "$ZED_UPDATE_SELF"' EXIT
 
 C_GREEN=$'\033[1;32m'
 C_YELLOW=$'\033[1;33m'
@@ -104,7 +107,9 @@ record_update() {
 }
 
 # --------------------------------------------------------------------- main
+command -v docker >/dev/null 2>&1 || die "docker is not installed or not on PATH."
 [[ -d "$APP_DIR/.git" ]] || die "$APP_DIR is not a git checkout — cannot update."
+[[ -f "$ENV_FILE" ]] || die "missing $ENV_FILE — run scripts/install.sh first."
 cd "$APP_DIR"
 
 PREV_COMMIT="$(git rev-parse HEAD)"
@@ -124,7 +129,7 @@ BACKUP_ARCHIVE="$(bash "$APP_DIR/scripts/backup.sh" | tail -n1)"
 log "pre-update backup: $BACKUP_ARCHIVE"
 
 log "step 2/4 — fetching latest code"
-git fetch origin
+git fetch origin --prune --tags
 git reset --hard "origin/${BRANCH}"
 
 NEW_COMMIT="$(git rev-parse HEAD)"
@@ -169,6 +174,9 @@ log "restoring pre-update backup: $BACKUP_ARCHIVE"
 if FORCE=1 bash "$APP_DIR/scripts/restore.sh" "$BACKUP_ARCHIVE"; then
     log "rollback complete — stack healthy again on v${PREV_VERSION}"
 else
+    # Last resort: make sure the stack is at least running on the rolled-back
+    # code, and point the operator at the logs.
+    "${COMPOSE[@]}" up -d --build || true
     err "restore failed or stack still unhealthy after rollback — inspect with: zed-downloader logs api"
 fi
 
