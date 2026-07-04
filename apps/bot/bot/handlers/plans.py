@@ -5,14 +5,28 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from aiogram import F, Router
+from aiogram.enums import ChatType
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import Chat, CallbackQuery, Message
 
 from bot.i18n import t
 from bot.keyboards.plans import pay_keyboard, plans_keyboard
 from bot.services import api_client
 
 router = Router(name="plans")
+
+_GROUP_TYPES = {ChatType.GROUP, ChatType.SUPERGROUP}
+
+
+def scope_and_chat_id(chat: Chat) -> tuple[str, int | None]:
+    """Map a chat to (plans scope, payment chat_id).
+
+    Group chats use group-scope plans and must carry the negative group id;
+    private chats use user-scope plans with no chat_id.
+    """
+    if chat.type in _GROUP_TYPES:
+        return "group", chat.id
+    return "user", None
 
 
 def format_price(value: Any) -> str:
@@ -50,12 +64,14 @@ def render_plans_text(plans: list[dict[str, Any]], lang: str) -> str:
 
 @router.message(Command("plans"))
 async def cmd_plans(message: Message, lang: str) -> None:
-    plans = await api_client.get_plans()
+    scope, _ = scope_and_chat_id(message.chat)
+    plans = await api_client.get_plans(scope=scope)
     if plans is None:
         await message.answer(t(lang, "errors.api_unreachable"))
         return
     if not plans:
-        await message.answer(t(lang, "plans.empty"))
+        key = "plans.group_empty" if scope == "group" else "plans.empty"
+        await message.answer(t(lang, key))
         return
     await message.answer(
         render_plans_text(plans, lang), reply_markup=plans_keyboard(plans, lang)
@@ -70,8 +86,14 @@ async def buy_plan(callback: CallbackQuery, lang: str) -> None:
         await callback.answer()
         return
 
+    # The chat the buy button lives in decides the scope: a group needs its
+    # negative chat_id passed to the payment call; a private chat sends none.
+    _, chat_id = scope_and_chat_id(callback.message.chat)
     payment = await api_client.create_payment(
-        telegram_id=callback.from_user.id, plan_id=plan_id, gateway="zarinpal"
+        telegram_id=callback.from_user.id,
+        plan_id=plan_id,
+        gateway="zarinpal",
+        chat_id=chat_id,
     )
     if payment is None or not payment.get("payment_url"):
         await callback.answer(t(lang, "payment.failed"), show_alert=True)

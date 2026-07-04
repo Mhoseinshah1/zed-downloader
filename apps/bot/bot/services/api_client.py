@@ -161,9 +161,13 @@ async def request_download(
     )
 
 
-async def get_plans() -> list[dict[str, Any]] | None:
-    """GET /api/internal/plans -> list of plan dicts, or None on error."""
-    body = await _get("/api/internal/plans")
+async def get_plans(scope: str = "user") -> list[dict[str, Any]] | None:
+    """GET /api/internal/plans?scope=user|group -> list of plan dicts, or None.
+
+    ``scope`` is ``"user"`` for private-chat (user) plans and ``"group"`` for
+    group-chat plans; the backend returns the plans relevant to that scope.
+    """
+    body = await _get(f"/api/internal/plans?scope={scope}")
     if body is None:
         return None
     return body.get("plans", [])
@@ -178,10 +182,35 @@ async def get_forced_channels() -> list[dict[str, Any]] | None:
 
 
 async def create_payment(
-    telegram_id: int, plan_id: int, gateway: str = "zarinpal"
+    telegram_id: int,
+    plan_id: int,
+    gateway: str = "zarinpal",
+    chat_id: int | None = None,
 ) -> dict[str, Any] | None:
-    """POST /api/internal/payments/create -> {payment_id, payment_url, authority}."""
+    """POST /api/internal/payments/create -> {payment_id, payment_url, authority}.
+
+    ``chat_id`` is the negative group id and is REQUIRED for group-scope plans;
+    it is omitted for user-scope plans in private chats.
+    """
     return await _post(
         "/api/internal/payments/create",
-        {"telegram_id": telegram_id, "plan_id": plan_id, "gateway": gateway},
+        _clean(
+            {
+                "telegram_id": telegram_id,
+                "plan_id": plan_id,
+                "gateway": gateway,
+                "chat_id": chat_id,
+            }
+        ),
     )
+
+
+async def get_texts() -> dict[str, Any] | None:
+    """GET /api/internal/texts -> {lang: {key: value}} overlay, or None on error.
+
+    The panel-edited texts overlay the bundled i18n JSON at startup.
+    """
+    body = await _get("/api/internal/texts")
+    if body is None:
+        return None
+    return body.get("texts", {})

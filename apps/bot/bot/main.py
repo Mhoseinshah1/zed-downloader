@@ -9,6 +9,7 @@ from aiogram.enums import ParseMode
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
+from bot import i18n
 from bot.config import Settings, get_settings
 from bot.handlers import download, help as help_handler, language, plans, start
 from bot.middlewares.user import UserMiddleware
@@ -17,6 +18,25 @@ from bot.services import api_client
 logger = logging.getLogger(__name__)
 
 WEBHOOK_PATH = "/webhook/telegram"
+
+
+async def load_texts_overlay() -> None:
+    """Best-effort overlay of panel-edited texts onto the bundled i18n.
+
+    Runs once at startup (both polling and webhook modes). A fetch failure must
+    NOT crash the bot -- we simply keep the bundled JSON defaults. This is a
+    startup-only overlay; a periodic refresh could be added later if needed.
+    """
+    try:
+        texts = await api_client.get_texts()
+    except Exception:  # pragma: no cover - defensive; get_texts already guards
+        logger.exception("Failed to fetch editable texts overlay; keeping JSON")
+        return
+    if not texts:
+        logger.info("No editable texts overlay applied; using bundled i18n")
+        return
+    i18n.apply_overlay(texts)
+    logger.info("Applied editable texts overlay for %d language(s)", len(texts))
 
 
 def build_dispatcher() -> Dispatcher:
@@ -34,6 +54,7 @@ def build_dispatcher() -> Dispatcher:
     dp.include_router(plans.router)
     dp.include_router(download.router)
 
+    dp.startup.register(load_texts_overlay)
     dp.shutdown.register(api_client.close_client)
     return dp
 
